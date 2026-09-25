@@ -1,3 +1,3 @@
-module github.com/ManasDasari/sprout
+module github.com/Sprout-DevLabs/sprout
 
 go 1.22
