@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
 )
 
 // Options controls how the tree is built.
@@ -21,6 +21,7 @@ type Node struct {
 	IsDir    bool
 	Size     int64
 	Children []*Node
+	Err      error // set when a directory couldn't be read; the walk continues
 }
 
 // BuildTree walks root according to opts and returns the resulting tree.
@@ -48,14 +49,17 @@ func populate(node *Node, opts Options, depth int) error {
 		return nil
 	}
 
+	// os.ReadDir already returns entries sorted by name.
 	entries, err := os.ReadDir(node.Path)
 	if err != nil {
-		return err
+		if depth == 0 {
+			return err
+		}
+		// One unreadable subdirectory (e.g. permission denied) shouldn't
+		// abort the whole walk; record it and keep going.
+		node.Err = err
+		return nil
 	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
 
 	for _, entry := range entries {
 		name := entry.Name()
@@ -96,7 +100,7 @@ func populate(node *Node, opts Options, depth int) error {
 }
 
 // PrintTree renders node's children using the familiar ├──/└── connectors.
-func PrintTree(node *Node, prefix string) {
+func PrintTree(w io.Writer, node *Node, prefix string) {
 	for i, child := range node.Children {
 		connector := "├── "
 		nextPrefix := prefix + "│   "
@@ -110,10 +114,23 @@ func PrintTree(node *Node, prefix string) {
 			suffix = "/"
 		}
 
-		fmt.Println(prefix + connector + child.Name + suffix)
+		if child.Err != nil {
+			suffix += "  [" + errReason(child.Err) + "]"
+		}
+
+		fmt.Fprintln(w, prefix+connector+child.Name+suffix)
 
 		if child.IsDir {
-			PrintTree(child, nextPrefix)
+			PrintTree(w, child, nextPrefix)
 		}
 	}
+}
+
+// errReason strips the path from *PathError so the tree shows just
+// "permission denied" next to the entry that already names the path.
+func errReason(err error) string {
+	if pe, ok := err.(*os.PathError); ok {
+		return pe.Err.Error()
+	}
+	return err.Error()
 }
