@@ -31,6 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
 	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
 	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
+	diffRev := fs.String("diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	path, err := parseArgs(fs, args)
@@ -63,26 +64,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		NoIgnore:   *noIgnore || all,
 	}
 
-	tree, err := BuildTree(path, opts)
+	tree, branch, err := load(path, opts, *gitStatus, *diffRev)
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
-	}
-
-	branch := ""
-	if *gitStatus {
-		repo, err := openRepo(path)
-		if err == nil {
-			var changes map[string]string
-			if changes, err = repo.status(); err == nil {
-				applyChanges(tree, changes)
-				branch = repo.branch()
-			}
-		}
-		if err != nil {
-			fmt.Fprintln(stderr, "sprout: --git:", err)
-			return 1
-		}
 	}
 
 	if *asJSON {
@@ -101,12 +86,48 @@ func run(args []string, stdout, stderr io.Writer) int {
 	p := printer{w: stdout, color: useColor(stdout)}
 	header := paint(p.color, blue+";"+bold, path)
 	if branch != "" {
-		header += paint(p.color, dim, " on "+branch)
+		header += paint(p.color, dim, " "+branch)
 	}
 	fmt.Fprintln(stdout, header)
 	p.tree(tree.Root, "")
-	printSummary(stdout, tree)
+	if *diffRev != "" {
+		fmt.Fprintf(stdout, "\n%s changed, +%d -%d\n", plural(tree.Root.Changes, "file"), tree.Root.Added, tree.Root.Deleted)
+	} else {
+		printSummary(stdout, tree)
+	}
 	return 0
+}
+
+// load builds the tree for the requested mode: a filesystem walk, optionally
+// annotated with git status, or a tree of just the paths in a git diff.
+func load(path string, opts Options, gitStatus bool, diffRev string) (*Tree, string, error) {
+	if !gitStatus && diffRev == "" {
+		t, err := BuildTree(path, opts)
+		return t, "", err
+	}
+
+	repo, err := openRepo(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if diffRev != "" {
+		files, err := repo.diff(diffRev)
+		if err != nil {
+			return nil, "", err
+		}
+		return diffTree(displayName(path), files, opts.MaxDepth), diffRev, nil
+	}
+
+	t, err := BuildTree(path, opts)
+	if err != nil {
+		return nil, "", err
+	}
+	changes, err := repo.status()
+	if err != nil {
+		return nil, "", err
+	}
+	applyChanges(t, changes)
+	return t, "on " + repo.branch(), nil
 }
 
 // printSummary mirrors tree's closing line, and says what was left out so

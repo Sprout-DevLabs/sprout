@@ -114,7 +114,7 @@ func insertPath(t *Tree, rel string) *Node {
 			cur = cur.Children[idx]
 			continue
 		}
-		child := &Node{Name: name, Rel: strings.Join(parts[:i+1], "/"), IsDir: i < len(parts)-1, Missing: true}
+		child := &Node{Name: name, Rel: strings.Join(parts[:i+1], "/"), IsDir: i < len(parts)-1}
 		cur.Children = append(cur.Children, nil)
 		copy(cur.Children[idx+1:], cur.Children[idx:])
 		cur.Children[idx] = child
@@ -127,5 +127,83 @@ func walk(n *Node, fn func(*Node)) {
 	fn(n)
 	for _, c := range n.Children {
 		walk(c, fn)
+	}
+}
+
+// diff returns per-file change codes and line counts for a revision range,
+// with paths relative to root. rev is passed to git as a single revision
+// argument, e.g. "main...HEAD", "HEAD~3", or "v1.0..v1.1".
+func (r *gitRepo) diff(rev string) (map[string]*Node, error) {
+	// A leading "-" would let a crafted rev inject git options (e.g. --output).
+	if rev == "" || strings.HasPrefix(rev, "-") {
+		return nil, fmt.Errorf("invalid revision %q", rev)
+	}
+	base := []string{"diff", "--relative", "--find-renames", "-z"}
+	names, err := r.run(append(base, "--name-status", "--end-of-options", rev, "--")...)
+	if err != nil {
+		return nil, err
+	}
+	nums, err := r.run(append(base, "--numstat", "--end-of-options", rev, "--")...)
+	if err != nil {
+		return nil, err
+	}
+
+	files := map[string]*Node{}
+	f := strings.Split(names, "\x00")
+	for i := 0; i+1 < len(f); i += 2 {
+		code := f[i][:1]
+		if code == "R" || code == "C" {
+			i++ // "R100\0old\0new": keep the new path
+		}
+		files[f[i+1]] = &Node{Status: code}
+	}
+
+	f = strings.Split(nums, "\x00")
+	for i := 0; i < len(f); i++ {
+		cols := strings.SplitN(f[i], "\t", 3)
+		if len(cols) != 3 {
+			continue
+		}
+		p := cols[2]
+		if p == "" { // rename: "a\td\t\0old\0new"
+			if i+2 >= len(f) {
+				break
+			}
+			p, i = f[i+2], i+2
+		}
+		if n := files[p]; n != nil {
+			fmt.Sscan(cols[0], &n.Added) // "-" for binary files leaves 0
+			fmt.Sscan(cols[1], &n.Deleted)
+		}
+	}
+	return files, nil
+}
+
+// diffTree builds a tree of only the changed paths, so a PR's structural
+// footprint reads at a glance. Directories sum their children's line counts;
+// below maxDepth (if >= 0) subtrees collapse into those totals.
+func diffTree(name string, files map[string]*Node, maxDepth int) *Tree {
+	t := &Tree{Root: &Node{Name: name, IsDir: true}, hides: func(string) bool { return false }}
+	for p, f := range files {
+		n := insertPath(t, p)
+		n.Status, n.Added, n.Deleted = f.Status, f.Added, f.Deleted
+	}
+	rollup(t.Root, 0, maxDepth)
+	return t
+}
+
+func rollup(n *Node, depth, maxDepth int) {
+	for _, c := range n.Children {
+		if c.IsDir {
+			rollup(c, depth+1, maxDepth)
+			n.Changes += c.Changes
+		} else {
+			n.Changes++
+		}
+		n.Added += c.Added
+		n.Deleted += c.Deleted
+	}
+	if maxDepth >= 0 && depth >= maxDepth && n.Children != nil {
+		n.Children, n.Truncated = nil, true
 	}
 }

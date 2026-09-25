@@ -26,9 +26,10 @@ type Node struct {
 	Err      error // set when a directory couldn't be read; the walk continues
 
 	Truncated bool   // directory not expanded because of --depth
-	Missing   bool   // not on disk; inserted to show a deletion in place
 	Status    string // --git / --diff change code: M, A, D, R, ?, U
 	Changes   int    // directories: changed paths anywhere below
+	Added     int    // --diff: lines added (directories: total below)
+	Deleted   int    // --diff: lines deleted (directories: total below)
 }
 
 // Tree is a walked directory plus what the walk left out.
@@ -177,19 +178,19 @@ func (p printer) tree(node *Node, prefix string) {
 func (p printer) label(n *Node) string {
 	name := n.Name
 	switch {
-	case n.Missing:
-		name = paint(p.color, red, name)
 	case n.IsDir:
 		name = paint(p.color, blue+";"+bold, name+"/")
-	}
-	if n.IsDir && n.Missing {
-		name += paint(p.color, red, "/")
+	case n.Status == "D":
+		name = paint(p.color, red, name)
 	}
 	if n.Status != "" {
 		name += "  " + paint(p.color, statusColor[n.Status], n.Status)
 	}
 	if n.Changes > 0 {
 		name += "  " + paint(p.color, dim, fmt.Sprintf("(%d changed)", n.Changes))
+	}
+	if n.Added+n.Deleted > 0 {
+		name += "  " + paint(p.color, green, fmt.Sprintf("+%d", n.Added)) + " " + paint(p.color, red, fmt.Sprintf("-%d", n.Deleted))
 	}
 	if n.Err != nil {
 		name += "  " + paint(p.color, red, "["+errReason(n.Err)+"]")
