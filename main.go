@@ -29,6 +29,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.IntVar(&depth, "L", -1, "shorthand for --depth")
 	ignore := fs.String("ignore", "", "comma-separated names/globs to ignore, e.g. '*.log,fixtures'")
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
+	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	path, err := parseArgs(fs, args)
@@ -65,6 +66,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
+	}
+
+	if *asJSON {
+		if err := WriteJSON(stdout, tree, path); err != nil {
+			fmt.Fprintln(stderr, "sprout:", err)
+			return 1
+		}
+		return 0
 	}
 
 	if *stats {

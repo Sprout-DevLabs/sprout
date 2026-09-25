@@ -60,7 +60,7 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 		}
 	}
 
-	node := &Node{Name: filepath.Base(root), Path: root, IsDir: info.IsDir()}
+	node := &Node{Name: displayName(root), Path: root, IsDir: info.IsDir()}
 	if node.IsDir {
 		if err := w.populate(node, 0); err != nil {
 			return nil, err
