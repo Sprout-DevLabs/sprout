@@ -41,3 +41,14 @@ func TestVersion(t *testing.T) {
 		t.Errorf("unexpected --version output %q (exit %d)", out, code)
 	}
 }
+
+func TestHelp(t *testing.T) {
+	out, _, code := runCLI(t, "--help")
+	if code != 0 || !strings.Contains(out, "Usage:") {
+		t.Errorf("--help: exit %d, output %q", code, out)
+	}
+	_, errOut, code := runCLI(t, "--nope")
+	if code != 2 || !strings.Contains(errOut, "sprout --help") {
+		t.Errorf("unknown flag: exit %d, stderr %q", code, errOut)
+	}
+}

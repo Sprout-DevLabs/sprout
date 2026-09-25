@@ -8,6 +8,39 @@ import (
 	"runtime/debug"
 )
 
+const usage = `sprout: map your codebase, for you and your AI agent
+
+Usage:
+  sprout [path] [flags]
+  sprout mcp [root]       serve project_map, tree and diff_tree to coding agents (MCP, stdio)
+
+Views:
+  (default)               tree of the project, respecting .gitignore
+  --ai                    compact project map for LLM prompts; --budget N tokens (default 2000)
+  --diff REV              only what changed in REV, e.g. main...HEAD or HEAD~3
+  --stats                 files, size, languages, detected stack
+  --json                  tree and stats as JSON (schemaVersion 1)
+
+Annotations:
+  --git                   mark changed files: M modified, A added, D deleted, R renamed, ? untracked, U conflict
+  --churn                 commits per path, to spot hotspots; --since '90 days ago'
+
+Filtering:
+  -L, --depth N           limit depth
+  -a, --all               show hidden and ignored entries
+  --hidden                show dotfiles
+  --no-ignore             skip .gitignore and the built-in ignore list
+  --ignore LIST           extra names/globs to hide, comma-separated: '*.log,fixtures'
+
+  --version               print version
+
+Examples:
+  sprout -L 2
+  sprout --ai | pbcopy
+  sprout --diff main...HEAD -L 2
+  sprout --churn --since '6 months ago'
+`
+
 // version is set at release time via -ldflags "-X main.version=...".
 var version = "dev"
 
@@ -21,6 +54,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sprout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() {} // errors get a one-line hint below; --help gets usage on stdout
 
 	var all bool
 	fs.BoolVar(&all, "all", false, "show everything: hidden files and ignored entries")
@@ -42,10 +76,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	path, err := parseArgs(fs, args)
+	if err == flag.ErrHelp {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
 	if err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
+		fmt.Fprintln(stderr, "Run 'sprout --help' for usage.")
 		return 2
 	}
 

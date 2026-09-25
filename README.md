@@ -1,517 +1,192 @@
-# Sprout (under development)
+# 🌱 Sprout
 
-- Understand your project at a glance.
+**Map your codebase, for you and your AI agent.**
 
-Sprout is a fast, developer-first directory explorer written in Go.
+[![CI](https://github.com/Sprout-DevLabs/sprout/actions/workflows/go.yml/badge.svg)](https://github.com/Sprout-DevLabs/sprout/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/Sprout-DevLabs/sprout?include_prereleases)](https://github.com/Sprout-DevLabs/sprout/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-It takes the familiar idea behind `tree` and focuses it around a modern developer workflow: simple commands, project-aware filtering, useful statistics, Git awareness, and machine-readable output.
+Sprout is a fast, single-binary directory explorer built around how developers
+actually read projects. It respects `.gitignore`, shows git changes and
+hotspots in the tree, renders a PR as a tree, and produces a compact project
+map for LLMs. It also runs as an MCP server, so coding agents can use it
+directly.
 
-Instead of asking, "How do I list every file?", Sprout asks, "What parts of this project actually matter?"
-
-## Features
-
-**Currently planned**
-
-- Clean directory tree visualization
-- Hidden file support
-- Configurable directory depth
-- Simple ignore patterns
-- Project-aware filtering
-- Project statistics
-- Git status integration
-- JSON / Markdown output
-- AI-friendly project mapping
-- Fast native executable
-- Cross-platform support
-
-Note: Sprout is currently under development. Some features listed above are planned and may not yet be available.
-
-## Quick Start
-
-### Install with Go
-
-```
-go install github.com/Sprout-DevLabs/sprout@latest
+```bash
+sprout --ai | pbcopy                # project context for any chat, ~2k tokens
+sprout --diff main...HEAD -L 2      # what this branch touched, as a tree
+sprout --churn --since '90 days ago'  # where development is concentrated
 ```
 
-Then:
+📖 **Docs:** https://sprout-devlabs.github.io/sprout-web/
 
-```
-sprout
-```
+## Install
 
-### Build from source
-
-```
-git clone https://github.com/Sprout-DevLabs/sprout.git
-cd sprout
-go build -o sprout .
+```bash
+brew install sprout-devlabs/tap/sprout                 # macOS, Linux
+go install github.com/Sprout-DevLabs/sprout@latest     # Go 1.22+
 ```
 
-Run it:
+Or grab a binary for Linux, macOS or Windows (amd64/arm64) from
+[Releases](https://github.com/Sprout-DevLabs/sprout/releases).
+
+## A tree that knows what matters
 
 ```
-./sprout
+$ sprout -L 1          # in a clone of charmbracelet/bubbletea
+.
+├── LICENSE
+├── README.md
+├── commands.go
+├── examples/
+├── go.mod
+├── tea.go
+…
+└── xterm.go
+
+3 directories, 46 files (6 hidden or ignored, --all to show)
 ```
 
-## Basic Usage
+Inside a git repo, **`.gitignore` decides** what's shown. Sprout asks git
+itself, so nested ignores, negations and global excludes all work. Outside
+git, common build and dependency directories (`node_modules`, `dist`, `.venv`,
+`target`, …) are hidden instead. Filtering is never silent: the last line says
+how much was left out.
 
-Run Sprout in the current directory:
+| Flag | |
+|---|---|
+| `-L, --depth N` | Limit depth |
+| `-a, --all` | Show hidden and ignored entries |
+| `--hidden` | Show dotfiles |
+| `--no-ignore` | Skip `.gitignore` and the built-in list |
+| `--ignore LIST` | Extra names/globs, e.g. `'*.log,fixtures'` |
 
-```
-sprout
-```
+Flags go before or after the path.
 
-Explore a specific directory:
+## `--ai`: context for LLMs
 
-```
-sprout src
-```
-
-Limit the directory depth:
-
-```
-sprout --depth 2
-```
-
-Show hidden files:
-
-```
-sprout --hidden
-```
-
-Ignore specific directories:
+A structure-first map of the project, sized to a token budget. It never
+includes file contents.
 
 ```
-sprout --ignore node_modules,.git,venv
+$ sprout --ai --budget 500
+# bubbletea
+The fun, functional and stateful way to build terminal apps. A Go framework
+
+stack: Go (go.mod)
+languages: Go 66%, Markdown 26%, YAML 8%
+size: 228 files, 74 directories
+git: on main
+most changed (90d, commits): tea.go (5), color.go (2), cursed_renderer.go (2), examples/go.mod (2), go.mod (2)
+entry points: tutorials/basics/main.go, tutorials/commands/main.go
+config: .github/workflows/build.yml, .github/workflows/lint.yml, .github/workflows/release.yml, .goreleaser.yml, …
+
+## structure
+./ LICENSE README.md Taskfile.yaml clipboard.go color.go commands.go … tea.go termcap.go +10 more
+.github/ dependabot.yml
+  ISSUE_TEMPLATE/ bug.yml bug_report.md config.yml feature_request.md
+  workflows/ build.yml coverage.yml dependabot-sync.yml examples.yml lint.yml release.yml
+examples/ (147 files)
+testdata/
+  TestClearMsg/ bg_fg_cur_color.golden clear_screen.golden read_set_clipboard.golden
+  TestViewModel/ altscreen.golden altscreen_autoexit.golden bg_set_color.golden … +2 more
+tutorials/ go.mod go.sum
+  basics/ README.md main.go
+  commands/ README.md main.go
 ```
 
-Combine options:
+The budget (default 2000 tokens) is spent breadth-first. Every directory
+starts as a one-line summary and opens while the map still fits. Your own
+code is laid out before `examples/`, `tests/` and `vendor/` get any of it.
+
+## `--diff`: a PR as a tree
 
 ```
-sprout --hidden --depth 3 --ignore node_modules,.git
+$ sprout --diff main...HEAD -L 1
+. main...HEAD
+├── .github/  (2 changed)  +13 -28
+├── cursed_renderer.go  M  +67 -17
+├── cursed_renderer_test.go  M  +123 -0
+├── examples/  (3 changed)  +5 -5
+├── tea.go  M  +45 -20
+└── testdata/  (13 changed)  +13 -13
+
+34 files changed, +469 -98
 ```
 
-## Project Mode
+Takes any git revision: `main...HEAD` (since the branch point), `HEAD~3`,
+`v1.0..v1.1`. Line counts roll up into directories, and `--depth` collapses
+deep subtrees into their totals.
 
-Modern repositories contain a lot of files that aren't particularly useful when you're trying to understand the project.
-
-For example:
-
-```
-node_modules/
-.git/
-dist/
-.cache/
-__pycache__/
-.venv/
-```
-
-Instead of manually specifying every directory, Sprout will provide a project-aware mode:
+## `--git` and `--churn`
 
 ```
-sprout --project
+$ sprout --git                          $ sprout --churn -L 1
+. on feature/login                      .
+├── api/  (2 changed)                   ├── README.md  ▂ 23
+│   ├── auth.go  M                      ├── cursed_renderer.go  ▇ 86
+│   └── session.go  A                   ├── tea.go  █ 97
+└── old_auth.go  D                      └── examples/  ▅ 61
 ```
 
-The goal is to automatically identify common development artifacts while keeping important project files visible.
+`--git` marks `M` modified, `A` added, `D` deleted (shown where the file used
+to be), `R` renamed, `?` untracked, `U` conflicted. `--churn` counts the
+commits touching each path. `--since '90 days ago'` narrows the window.
+Both work together and with `--depth`.
 
-For example:
+## For coding agents: `sprout mcp`
 
-```
-my-project/
-├── src/
-│   ├── components/
-│   │   ├── Navbar.jsx
-│   │   └── Footer.jsx
-│   ├── App.jsx
-│   └── main.jsx
-├── tests/
-├── public/
-├── package.json
-└── README.md
+Sprout is also an [MCP](https://modelcontextprotocol.io) server. Agents get a
+map of the repo in one call instead of burning context on `ls -R` and `find`.
+
+```bash
+claude mcp add sprout -- sprout mcp
 ```
 
-Rather than:
-
-```
-my-project/
-├── node_modules/
-│   ├── ...
-│   └── ...
-├── .git/
-│   ├── ...
-│   └── ...
-├── src/
-├── dist/
-├── .cache/
-└── package.json
+```json
+{ "mcpServers": { "sprout": { "command": "sprout", "args": ["mcp"] } } }
 ```
 
-## Smart Mode
+| Tool | Does |
+|---|---|
+| `project_map` | The `--ai` map. Agents are told to call it first in an unfamiliar repo |
+| `tree` | Tree of a subdirectory, optionally with `git` status or `churn` (depth 3 by default) |
+| `diff_tree` | `--diff` for a revision like `main...HEAD` |
 
-Sprout will eventually provide a smarter project inspection mode:
+Paths are confined to the directory the server was started in, symlinks
+included, and git arguments can't carry options.
 
-```
-sprout --smart
-```
+## Scripting: `--json` and `--stats`
 
-This mode can detect common project characteristics and make sensible decisions about what to display.
+`--json` emits the tree, detected stack and stats as one document with a
+`schemaVersion`. Adding fields isn't a breaking change. Every other flag
+applies, so `sprout --diff main...HEAD --json` feeds a PR bot directly.
 
-For example:
-
-```
-Detected project:
-  Language:       Python
-  Framework:      FastAPI
-  Package manager: pip
-  Version control: Git
-Ignored:
-  .venv/          Python virtual environment
-  __pycache__/    Python bytecode cache
-  .git/           Git metadata
-```
-
-Sprout should never hide files without making it possible to understand why.
-
-Use:
-
-```
-sprout --smart --explain
-```
-
-to see the reasoning behind automatic filtering.
-
-## Project Statistics
-
-Sprout will provide an optional project overview:
-
-```
+```bash
+sprout --json | jq '.summary.languages'
 sprout --stats
 ```
 
-Example:
+## Design principles
 
-```
-my-project/
-Files:          87
-Directories:    19
-Total size:     4.8 MB
-Languages:
-  Python        48 files
-  JavaScript    21 files
-  CSS            9 files
-  Markdown      6 files
-  JSON           3 files
-```
-
-This turns Sprout from a simple tree renderer into a lightweight project inspection tool.
-
-## Git Integration
-
-Future versions will provide Git-aware output:
-
-```
-sprout --git
-```
-
-Example:
-
-```
-project/
-├── src/
-│   ├── api.py          M
-│   ├── models.py
-│   └── utils.py
-├── tests/
-│   └── test_api.py     ?
-└── README.md
-```
-
-Possible status indicators:
-
-```
-M   Modified
-A   Added
-D   Deleted
-?   Untracked
-```
-
-The goal is to see both project structure and current changes in one place.
-
-## Machine-Readable Output
-
-Sprout isn't intended to be useful only to humans.
-
-Future versions will support structured output:
-
-```
-sprout --json
-```
-
-Example:
-
-```json
-{
-  "name": "my-project",
-  "type": "directory",
-  "children": [
-    {
-      "name": "src",
-      "type": "directory"
-    },
-    {
-      "name": "main.py",
-      "type": "file"
-    }
-  ]
-}
-```
-
-Additional formats may include:
-
-```
-sprout --markdown
-sprout --yaml
-```
-
-This makes Sprout useful for:
-
-- Shell scripts
-- CI/CD
-- Documentation generators
-- Developer tooling
-- IDE integrations
-- AI-assisted development
-
-## AI Project Mapping
-
-One of Sprout's longer-term goals is to generate compact project context for AI tools.
-
-For example:
-
-```
-sprout --ai
-```
-
-could produce:
-
-```
-PROJECT: flow-study
-LANGUAGES:
-  Python 62%
-  JavaScript 31%
-  CSS 7%
-STRUCTURE:
-src/
-├── api/
-│   ├── routes.py
-│   └── models.py
-├── components/
-│   ├── Dashboard.jsx
-│   └── Login.jsx
-└── main.py
-tests/
-├── test_api.py
-└── test_auth.py
-CONFIG:
-  package.json
-  requirements.txt
-  .env.example
-```
-
-The purpose isn't to send an entire repository into an AI context window.
-
-Instead, Sprout aims to provide a compact representation of a project's structure and important metadata.
-
-This feature is part of the long-term roadmap and is not currently implemented.
-
-## Coming From tree?
-
-If you're already familiar with `tree`, the basic concepts should feel familiar.
-
-| tree | Sprout |
-|---|---|
-| `tree` | `sprout` |
-| `tree -a` | `sprout --hidden` |
-| `tree -L 2` | `sprout --depth 2` |
-| `tree -I venv` | `sprout --ignore venv` |
-| Complex filtering | `sprout --project` |
-| Manual project filtering | `sprout --smart` |
-| Basic tree output | `sprout --stats` |
-| Filesystem visualization | `sprout --git` |
-| Text output | `sprout --json` |
-
-Sprout isn't intended to simply duplicate every feature of `tree`.
-
-The goal is to provide a developer-oriented interface with sensible defaults.
-
-## Design Philosophy
-
-Sprout follows a few simple principles.
-
-1. **Simple by default.** Basic usage should require almost no documentation:
-
-   ```
-   sprout
-   ```
-
-2. **Useful defaults.** Developers shouldn't need to remember a long list of directories that should usually be ignored.
-
-3. **Transparent automation.** Smart features should explain their decisions.
-
-4. **Human and machine friendly.** Terminal output should be pleasant to read while structured output should be easy for programs to consume.
-
-5. **Fast.** Sprout should remain lightweight and fast enough to use repeatedly during development.
-
-6. **Cross-platform.** Sprout should work across:
-
-   - macOS
-   - Linux
-   - Windows
-
-   and support common architectures such as:
-
-   - amd64
-   - arm64
-
-## Built With
-
-Sprout is written in Go.
-
-The project intentionally relies heavily on Go's standard library where practical.
-
-Potential areas include:
-
-- os
-- path/filepath
-- flag
-- encoding/json
-- runtime
-- filesystem APIs
-
-External dependencies should be kept minimal.
+- **Useful by default.** `sprout` with no flags should be the right answer most of the time.
+- **Transparent.** Anything hidden automatically is counted and can be shown.
+- **Humans and machines.** Color on terminals only (`NO_COLOR` respected), plain text in pipes, JSON when asked.
+- **Small.** One ~1 MB static binary, standard library only, git is the only runtime dependency (and only for git features).
 
 ## Roadmap
 
-**v0.1**
-- Basic directory traversal
-- Tree rendering
-- Directory argument
-- `--hidden`
-- `--depth`
-- `--ignore`
-- Cross-platform support
-- Unit tests
-- CI
+- `--entry`: suggested reading order, ranked by how central each file is in the import graph
+- Editor integrations built on `--json`
+- Monorepo awareness: one map section per workspace package
 
-**v0.2**
-- `--project`
-- Project type detection
-- Smart filtering
-- `--stats`
-
-**v0.3**
-- `--git`
-- Git status indicators
-- Improved project detection
-- `--orphans` — cross-reference the import graph against the filesystem and flag files nothing imports; a lightweight dead-code finder that isn't scoped to one language or bolted onto a heavyweight linter
-- `--churn` — parse `git log` change frequency per file and render it inline in the tree as an intensity marker, so hotspots are visible at a glance instead of living in a separate report
-
-**v0.4**
-- `--json`
-- `--markdown`
-- Structured output API
-- `--diff <ref>..<ref>` — render a tree with added, removed, and changed subtrees nested in place, instead of a flat file-stat list, so structural impact of a PR is visible at a glance
-- `--config-map` — group every config-ish file across the repo (`.env*`, `*.config.*`, `Dockerfile`, `docker-compose.yml`, CI YAML, `tsconfig`, etc.) into one flat "control plane" view instead of leaving them scattered through the tree
-
-**v1.0**
-- Stable CLI interface
-- Performance benchmarks
-- GoReleaser
-- GitHub Releases
-- Homebrew distribution
-- Comprehensive documentation
-- Contribution guide
-
-**Future**
-- `--ai`
-- AI-oriented project context
-- `--entry` — build a lightweight import/dependency graph per language and rank files by centrality (how many files import them, how deep from an entry point like `main.go` or `index.js`), producing a suggested reading order for unfamiliar codebases
-- Additional output formats
-- Editor integrations
-- Plugin/extensibility system
-
-## Project Structure
-
-Once v0.1 is stable, the plan is to move Sprout under an organization and split it into focused repositories:
-
-- **sprout-src** — the core CLI and Go source
-- **sprout-docs** — documentation site and guides
-- **homebrew-tap** — Homebrew tap for `brew install`
-- Additional repos as needed (e.g. editor integrations, plugin registry)
-
-This keeps the core binary lean while letting docs, distribution, and integrations evolve independently.
-
-## Distribution
-
-The goal is to make Sprout installable through several methods.
-
-**Go**
-
-```
-go install github.com/Sprout-DevLabs/sprout@latest
-```
-
-**Homebrew**
-
-Eventually:
-
-```
-brew install ManasDasri/tap/sprout
-```
-
-**GitHub Releases**
-
-Precompiled binaries will eventually be provided for:
-
-- macOS ARM64
-- macOS AMD64
-- Linux ARM64
-- Linux AMD64
-- Windows AMD64
-
-Automated releases will be handled through GoReleaser.
+Ideas and bugs: [open an issue](https://github.com/Sprout-DevLabs/sprout/issues).
 
 ## Contributing
 
-Contributions are welcome.
-
-Before submitting a pull request:
-
-```
-go test ./...
-```
-
-Please keep contributions focused and maintain the project's emphasis on:
-
-- Simple UX
-- Clear APIs
-- Cross-platform compatibility
-- Good documentation
-- Minimal unnecessary dependencies
-
-For larger changes, open an issue first so the design can be discussed before implementation.
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `go test ./...` passes, one
+feature per PR, no new dependencies without an issue first.
 
 ## License
 
-Sprout will be released under the MIT License.
-
-See LICENSE for details.
-
-## Why "Sprout"?
-
-A directory tree shows what's growing in a project.
-
-Sprout is meant to help you see the useful parts without having to dig through the entire forest.
-
-Understand your project at a glance.
+[MIT](LICENSE)
