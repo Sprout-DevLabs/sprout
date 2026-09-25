@@ -50,6 +50,8 @@ var fileNames = map[string]string{
 	"Justfile":   "Justfile",
 	"Gemfile":    "Ruby",
 	"Rakefile":   "Ruby",
+	"go.mod":     "Go modules",
+	"go.sum":     "Go modules",
 }
 
 // languageOf returns a display label for a file, or "" if it has none.
@@ -98,14 +100,20 @@ func formatSize(bytes int64) string {
 }
 
 // PrintStats renders the my-project/ summary shown in the README's --stats example.
-func PrintStats(w io.Writer, root *Node, path string) {
+func PrintStats(w io.Writer, t *Tree, path string) {
 	s := &Stats{Languages: make(map[string]int)}
-	collectStats(root, s)
+	collectStats(t.Root, s)
 
-	fmt.Fprintf(w, "%s/\n", strings.TrimSuffix(path, "/"))
+	fmt.Fprintf(w, "%s/\n", displayName(path))
+	for _, p := range DetectProject(path) {
+		fmt.Fprintf(w, "Project:        %s (%s, %s)\n", p.Language, p.PackageManager, p.Manifest)
+	}
 	fmt.Fprintf(w, "Files:          %d\n", s.Files)
 	fmt.Fprintf(w, "Directories:    %d\n", s.Directories)
 	fmt.Fprintf(w, "Total size:     %s\n", formatSize(s.TotalSize))
+	if t.Skipped > 0 {
+		fmt.Fprintf(w, "Ignored:        %d entries (--all to include)\n", t.Skipped)
+	}
 
 	if len(s.Languages) == 0 {
 		return
@@ -128,6 +136,24 @@ func PrintStats(w io.Writer, root *Node, path string) {
 
 	fmt.Fprintln(w, "Languages:")
 	for _, l := range langs {
-		fmt.Fprintf(w, "  %-14s %d files\n", l.Name, l.Count)
+		fmt.Fprintf(w, "  %-14s %s\n", l.Name, plural(l.Count, "file"))
 	}
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	if strings.HasSuffix(word, "y") {
+		return fmt.Sprintf("%d %sies", n, strings.TrimSuffix(word, "y"))
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// displayName turns "." or "../x/" into the directory's real name.
+func displayName(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Base(abs)
+	}
+	return path
 }

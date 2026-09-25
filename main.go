@@ -19,10 +19,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sprout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
+	var all bool
+	fs.BoolVar(&all, "all", false, "show everything: hidden files and ignored entries")
+	fs.BoolVar(&all, "a", false, "shorthand for --all")
 	hidden := fs.Bool("hidden", false, "show hidden files and directories")
-	depth := fs.Int("depth", -1, "limit directory depth (-1 for unlimited)")
-	ignore := fs.String("ignore", "", "comma-separated list of names/patterns to ignore")
-	project := fs.Bool("project", false, "ignore common build/dependency artifacts (node_modules, .git, dist, ...)")
+	noIgnore := fs.Bool("no-ignore", false, "don't apply .gitignore or the built-in ignore list")
+	var depth int
+	fs.IntVar(&depth, "depth", -1, "limit directory depth (-1 for unlimited)")
+	fs.IntVar(&depth, "L", -1, "shorthand for --depth")
+	ignore := fs.String("ignore", "", "comma-separated names/globs to ignore, e.g. '*.log,fixtures'")
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -50,31 +55,38 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	opts := Options{
-		ShowHidden: *hidden,
-		MaxDepth:   *depth,
-		Ignore:     buildIgnoreList(*ignore, *project),
+		ShowHidden: *hidden || all,
+		MaxDepth:   depth,
+		Ignore:     splitPatterns(*ignore),
+		NoIgnore:   *noIgnore || all,
 	}
 
-	root, err := BuildTree(path, opts)
+	tree, err := BuildTree(path, opts)
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
 	}
 
-	if *project {
-		if pi := DetectProject(path); pi != nil {
-			fmt.Fprintf(stdout, "Detected project:\n  Language:        %s\n  Package manager: %s\n\n", pi.Language, pi.PackageManager)
-		}
-	}
-
 	if *stats {
-		PrintStats(stdout, root, path)
+		PrintStats(stdout, tree, path)
 		return 0
 	}
 
 	fmt.Fprintln(stdout, path)
-	PrintTree(stdout, root, "")
+	PrintTree(stdout, tree.Root, "", nil)
+	printSummary(stdout, tree)
 	return 0
+}
+
+// printSummary mirrors tree's closing line, and says what was left out so
+// automatic filtering is never silent.
+func printSummary(w io.Writer, t *Tree) {
+	dirs, files := t.Root.Count()
+	fmt.Fprintf(w, "\n%s, %s", plural(dirs, "directory"), plural(files, "file"))
+	if t.Skipped > 0 {
+		fmt.Fprintf(w, " (%d hidden or ignored, --all to show)", t.Skipped)
+	}
+	fmt.Fprintln(w)
 }
 
 // parseArgs lets flags appear before or after the path. The flag package

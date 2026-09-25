@@ -5,37 +5,37 @@ import (
 	"path/filepath"
 )
 
-// ProjectInfo is what --project detects about the root directory from
-// well-known marker files. This is intentionally simple pattern matching,
-// not the fuller --smart heuristics planned for a later release.
+// ProjectInfo is one ecosystem detected from a well-known manifest file.
 type ProjectInfo struct {
-	Language       string
-	PackageManager string
+	Manifest       string `json:"manifest"`
+	Language       string `json:"language"`
+	PackageManager string `json:"packageManager"`
 }
 
-var projectMarkers = []struct {
-	File           string
-	Language       string
-	PackageManager string
-}{
+var projectMarkers = []ProjectInfo{
 	{"go.mod", "Go", "go modules"},
 	{"package.json", "JavaScript/TypeScript", "npm"},
-	{"pyproject.toml", "Python", "poetry/pip"},
+	{"pyproject.toml", "Python", "pip/poetry/uv"},
 	{"requirements.txt", "Python", "pip"},
 	{"Cargo.toml", "Rust", "cargo"},
 	{"pom.xml", "Java", "maven"},
 	{"build.gradle", "Java/Kotlin", "gradle"},
+	{"build.gradle.kts", "Kotlin", "gradle"},
 	{"Gemfile", "Ruby", "bundler"},
 	{"composer.json", "PHP", "composer"},
+	{"Package.swift", "Swift", "swiftpm"},
+	{"mix.exs", "Elixir", "mix"},
+	{"deno.json", "TypeScript", "deno"},
 }
 
-// DetectProject looks for the first recognized manifest file in root.
-// Returns nil if nothing matched.
-func DetectProject(root string) *ProjectInfo {
-	for _, marker := range projectMarkers {
-		if _, err := os.Stat(filepath.Join(root, marker.File)); err == nil {
-			return &ProjectInfo{Language: marker.Language, PackageManager: marker.PackageManager}
+// DetectProject returns every ecosystem whose manifest sits in root, so a
+// Go backend with a package.json frontend reports both.
+func DetectProject(root string) []ProjectInfo {
+	var found []ProjectInfo
+	for _, m := range projectMarkers {
+		if _, err := os.Stat(filepath.Join(root, m.Manifest)); err == nil {
+			found = append(found, m)
 		}
 	}
-	return nil
+	return found
 }

@@ -1,15 +1,16 @@
 package main
 
 import (
+	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
-// defaultProjectIgnores are common development artifacts that --project
-// filters out automatically, without the user having to type them every time.
-var defaultProjectIgnores = []string{
+// defaultIgnores are common development artifacts hidden outside git repos,
+// where there's no .gitignore to tell us what matters.
+var defaultIgnores = []string{
 	"node_modules",
-	".git",
 	"dist",
 	"build",
 	".cache",
@@ -19,7 +20,6 @@ var defaultProjectIgnores = []string{
 	".idea",
 	".vscode",
 	"target",
-	"bin",
 	"obj",
 	"coverage",
 	".next",
@@ -30,26 +30,14 @@ var defaultProjectIgnores = []string{
 	"*.egg-info",
 }
 
-// buildIgnoreList merges the user-supplied --ignore patterns with either
-// the --project defaults, or a minimal baseline (just .git) otherwise.
-func buildIgnoreList(userIgnore string, project bool) []string {
+// splitPatterns parses the comma-separated --ignore value.
+func splitPatterns(s string) []string {
 	var patterns []string
-
-	if project {
-		patterns = append(patterns, defaultProjectIgnores...)
-	} else {
-		patterns = append(patterns, ".git")
-	}
-
-	if userIgnore != "" {
-		for _, p := range strings.Split(userIgnore, ",") {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				patterns = append(patterns, p)
-			}
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			patterns = append(patterns, p)
 		}
 	}
-
 	return patterns
 }
 
@@ -61,4 +49,25 @@ func isIgnored(name string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// gitVisible asks git which paths under root belong to the project: tracked
+// files plus untracked files that aren't gitignored, and every parent
+// directory of those. ok is false outside a work tree or without git.
+//
+// ponytail: an untracked nested repo is listed as "dir/" and shows up empty;
+// walk into it separately if that ever matters.
+func gitVisible(root string) (map[string]bool, bool) {
+	out, err := exec.Command("git", "-C", root, "ls-files",
+		"--cached", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil, false
+	}
+	set := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		for p = strings.TrimSuffix(p, "/"); p != "" && p != "." && !set[p]; p = path.Dir(p) {
+			set[p] = true
+		}
+	}
+	return set, true
 }

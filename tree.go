@@ -10,42 +10,71 @@ import (
 // Options controls how the tree is built.
 type Options struct {
 	ShowHidden bool
-	MaxDepth   int // -1 means unlimited
-	Ignore     []string
+	MaxDepth   int      // -1 means unlimited
+	Ignore     []string // user patterns, always applied
+	NoIgnore   bool     // disable .gitignore and the built-in ignore list
 }
 
 // Node is one file or directory in the tree.
 type Node struct {
 	Name     string
-	Path     string
+	Path     string // filesystem path, for reading
+	Rel      string // slash-separated path relative to the root, for matching git output
 	IsDir    bool
 	Size     int64
 	Children []*Node
 	Err      error // set when a directory couldn't be read; the walk continues
 }
 
+// Tree is a walked directory plus what the walk left out.
+type Tree struct {
+	Root     *Node
+	Skipped  int  // entries hidden by dotfile or ignore rules
+	GitAware bool // .gitignore rules were applied
+}
+
+type walker struct {
+	opts    Options
+	ignore  []string
+	visible map[string]bool // nil unless GitAware
+	skipped int
+}
+
 // BuildTree walks root according to opts and returns the resulting tree.
-// It's the single traversal both PrintTree and PrintStats build on.
-func BuildTree(root string, opts Options) (*Node, error) {
+// It's the single traversal every output mode builds on.
+//
+// Ignore rules: inside a git work tree, .gitignore is the source of truth
+// (asked of git itself, so every gitignore feature is honoured). Outside git,
+// a built-in list of common build/dependency directories is used instead.
+func BuildTree(root string, opts Options) (*Tree, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 
+	w := &walker{opts: opts, ignore: append([]string{".git"}, opts.Ignore...)}
+	t := &Tree{}
+	if !opts.NoIgnore {
+		if w.visible, t.GitAware = gitVisible(root); !t.GitAware {
+			w.ignore = append(w.ignore, defaultIgnores...)
+		}
+	}
+
 	node := &Node{Name: filepath.Base(root), Path: root, IsDir: info.IsDir()}
 	if node.IsDir {
-		if err := populate(node, opts, 0); err != nil {
+		if err := w.populate(node, 0); err != nil {
 			return nil, err
 		}
 	} else {
 		node.Size = info.Size()
 	}
 
-	return node, nil
+	t.Root, t.Skipped = node, w.skipped
+	return t, nil
 }
 
-func populate(node *Node, opts Options, depth int) error {
-	if opts.MaxDepth >= 0 && depth >= opts.MaxDepth {
+func (w *walker) populate(node *Node, depth int) error {
+	if w.opts.MaxDepth >= 0 && depth >= w.opts.MaxDepth {
 		return nil
 	}
 
@@ -63,30 +92,31 @@ func populate(node *Node, opts Options, depth int) error {
 
 	for _, entry := range entries {
 		name := entry.Name()
-
-		if !opts.ShowHidden && len(name) > 0 && name[0] == '.' {
-			continue
-		}
-		if isIgnored(name, opts.Ignore) {
-			continue
+		rel := name
+		if node.Rel != "" {
+			rel = node.Rel + "/" + name
 		}
 
-		childPath := filepath.Join(node.Path, name)
+		if isIgnored(name, w.ignore) || (w.visible != nil && !w.visible[rel]) ||
+			(!w.opts.ShowHidden && name[0] == '.') {
+			w.skipped++
+			continue
+		}
+
 		info, err := entry.Info()
 		if err != nil {
-			// Skip entries we can't stat (e.g. broken symlinks) instead of
-			// failing the whole walk.
-			continue
+			continue // vanished between ReadDir and Lstat
 		}
 
 		child := &Node{
 			Name:  name,
-			Path:  childPath,
+			Path:  filepath.Join(node.Path, name),
+			Rel:   rel,
 			IsDir: entry.IsDir(),
 		}
 
 		if child.IsDir {
-			if err := populate(child, opts, depth+1); err != nil {
+			if err := w.populate(child, depth+1); err != nil {
 				return err
 			}
 		} else {
@@ -99,8 +129,22 @@ func populate(node *Node, opts Options, depth int) error {
 	return nil
 }
 
+// Count returns the number of directories and files below node.
+func (n *Node) Count() (dirs, files int) {
+	for _, c := range n.Children {
+		if c.IsDir {
+			d, f := c.Count()
+			dirs, files = dirs+d+1, files+f
+		} else {
+			files++
+		}
+	}
+	return dirs, files
+}
+
 // PrintTree renders node's children using the familiar ├──/└── connectors.
-func PrintTree(w io.Writer, node *Node, prefix string) {
+// annotate, if non-nil, returns extra text shown after an entry's name.
+func PrintTree(w io.Writer, node *Node, prefix string, annotate func(*Node) string) {
 	for i, child := range node.Children {
 		connector := "├── "
 		nextPrefix := prefix + "│   "
@@ -109,19 +153,23 @@ func PrintTree(w io.Writer, node *Node, prefix string) {
 			nextPrefix = prefix + "    "
 		}
 
-		suffix := ""
+		line := prefix + connector + child.Name
 		if child.IsDir {
-			suffix = "/"
+			line += "/"
 		}
-
 		if child.Err != nil {
-			suffix += "  [" + errReason(child.Err) + "]"
+			line += "  [" + errReason(child.Err) + "]"
+		}
+		if annotate != nil {
+			if a := annotate(child); a != "" {
+				line += "  " + a
+			}
 		}
 
-		fmt.Fprintln(w, prefix+connector+child.Name+suffix)
+		fmt.Fprintln(w, line)
 
 		if child.IsDir {
-			PrintTree(w, child, nextPrefix)
+			PrintTree(w, child, nextPrefix, annotate)
 		}
 	}
 }
