@@ -40,13 +40,17 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		errMsg = errReason(n.Err)
 	}
 	return json.Marshal(struct {
-		Name     string  `json:"name"`
-		Path     string  `json:"path,omitempty"`
-		Type     string  `json:"type"`
-		Size     int64   `json:"size,omitempty"`
-		Error    string  `json:"error,omitempty"`
-		Children []*Node `json:"children,omitempty"`
-	}{n.Name, n.Rel, typ, n.Size, errMsg, n.Children})
+		Name      string  `json:"name"`
+		Path      string  `json:"path,omitempty"`
+		Type      string  `json:"type"`
+		Size      int64   `json:"size,omitempty"`
+		Error     string  `json:"error,omitempty"`
+		Truncated bool    `json:"truncated,omitempty"`
+		Missing   bool    `json:"missing,omitempty"`
+		Status    string  `json:"status,omitempty"`
+		Changes   int     `json:"changes,omitempty"`
+		Children  []*Node `json:"children,omitempty"`
+	}{n.Name, n.Rel, typ, n.Size, errMsg, n.Truncated, n.Missing, n.Status, n.Changes, n.Children})
 }
 
 func WriteJSON(w io.Writer, t *Tree, path string) error {

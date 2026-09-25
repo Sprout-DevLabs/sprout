@@ -24,6 +24,11 @@ type Node struct {
 	Size     int64
 	Children []*Node
 	Err      error // set when a directory couldn't be read; the walk continues
+
+	Truncated bool   // directory not expanded because of --depth
+	Missing   bool   // not on disk; inserted to show a deletion in place
+	Status    string // --git / --diff change code: M, A, D, R, ?, U
+	Changes   int    // directories: changed paths anywhere below
 }
 
 // Tree is a walked directory plus what the walk left out.
@@ -31,6 +36,8 @@ type Tree struct {
 	Root     *Node
 	Skipped  int  // entries hidden by dotfile or ignore rules
 	GitAware bool // .gitignore rules were applied
+
+	hides func(name string) bool // the walk's name filter, reused for inserted paths
 }
 
 type walker struct {
@@ -69,12 +76,17 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 		node.Size = info.Size()
 	}
 
-	t.Root, t.Skipped = node, w.skipped
+	t.Root, t.Skipped, t.hides = node, w.skipped, w.hides
 	return t, nil
+}
+
+func (w *walker) hides(name string) bool {
+	return isIgnored(name, w.ignore) || (!w.opts.ShowHidden && name[0] == '.')
 }
 
 func (w *walker) populate(node *Node, depth int) error {
 	if w.opts.MaxDepth >= 0 && depth >= w.opts.MaxDepth {
+		node.Truncated = true
 		return nil
 	}
 
@@ -97,8 +109,7 @@ func (w *walker) populate(node *Node, depth int) error {
 			rel = node.Rel + "/" + name
 		}
 
-		if isIgnored(name, w.ignore) || (w.visible != nil && !w.visible[rel]) ||
-			(!w.opts.ShowHidden && name[0] == '.') {
+		if w.hides(name) || (w.visible != nil && !w.visible[rel]) {
 			w.skipped++
 			continue
 		}
@@ -142,9 +153,13 @@ func (n *Node) Count() (dirs, files int) {
 	return dirs, files
 }
 
-// PrintTree renders node's children using the familiar ├──/└── connectors.
-// annotate, if non-nil, returns extra text shown after an entry's name.
-func PrintTree(w io.Writer, node *Node, prefix string, annotate func(*Node) string) {
+// printer renders a tree with the familiar ├──/└── connectors.
+type printer struct {
+	w     io.Writer
+	color bool
+}
+
+func (p printer) tree(node *Node, prefix string) {
 	for i, child := range node.Children {
 		connector := "├── "
 		nextPrefix := prefix + "│   "
@@ -152,26 +167,34 @@ func PrintTree(w io.Writer, node *Node, prefix string, annotate func(*Node) stri
 			connector = "└── "
 			nextPrefix = prefix + "    "
 		}
-
-		line := prefix + connector + child.Name
+		fmt.Fprintln(p.w, paint(p.color, dim, prefix+connector)+p.label(child))
 		if child.IsDir {
-			line += "/"
-		}
-		if child.Err != nil {
-			line += "  [" + errReason(child.Err) + "]"
-		}
-		if annotate != nil {
-			if a := annotate(child); a != "" {
-				line += "  " + a
-			}
-		}
-
-		fmt.Fprintln(w, line)
-
-		if child.IsDir {
-			PrintTree(w, child, nextPrefix, annotate)
+			p.tree(child, nextPrefix)
 		}
 	}
+}
+
+func (p printer) label(n *Node) string {
+	name := n.Name
+	switch {
+	case n.Missing:
+		name = paint(p.color, red, name)
+	case n.IsDir:
+		name = paint(p.color, blue+";"+bold, name+"/")
+	}
+	if n.IsDir && n.Missing {
+		name += paint(p.color, red, "/")
+	}
+	if n.Status != "" {
+		name += "  " + paint(p.color, statusColor[n.Status], n.Status)
+	}
+	if n.Changes > 0 {
+		name += "  " + paint(p.color, dim, fmt.Sprintf("(%d changed)", n.Changes))
+	}
+	if n.Err != nil {
+		name += "  " + paint(p.color, red, "["+errReason(n.Err)+"]")
+	}
+	return name
 }
 
 // errReason strips the path from *PathError so the tree shows just

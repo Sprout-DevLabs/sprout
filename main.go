@@ -30,6 +30,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ignore := fs.String("ignore", "", "comma-separated names/globs to ignore, e.g. '*.log,fixtures'")
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
 	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
+	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	path, err := parseArgs(fs, args)
@@ -68,6 +69,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	branch := ""
+	if *gitStatus {
+		repo, err := openRepo(path)
+		if err == nil {
+			var changes map[string]string
+			if changes, err = repo.status(); err == nil {
+				applyChanges(tree, changes)
+				branch = repo.branch()
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "sprout: --git:", err)
+			return 1
+		}
+	}
+
 	if *asJSON {
 		if err := WriteJSON(stdout, tree, path); err != nil {
 			fmt.Fprintln(stderr, "sprout:", err)
@@ -81,8 +98,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	fmt.Fprintln(stdout, path)
-	PrintTree(stdout, tree.Root, "", nil)
+	p := printer{w: stdout, color: useColor(stdout)}
+	header := paint(p.color, blue+";"+bold, path)
+	if branch != "" {
+		header += paint(p.color, dim, " on "+branch)
+	}
+	fmt.Fprintln(stdout, header)
+	p.tree(tree.Root, "")
 	printSummary(stdout, tree)
 	return 0
 }
