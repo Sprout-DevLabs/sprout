@@ -1,0 +1,47 @@
+version: 2
+
+project_name: sprout
+
+builds:
+  - env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude: ["^docs", "^test", "^chore", "Merge pull request"]
+
+homebrew_casks:
+  - name: sprout
+    repository:
+      owner: Sprout-DevLabs
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://sprout-devlabs.github.io/sprout-web/
+    description: Map your codebase for you and your AI agent
+    license: MIT
+    hooks:
+      post:
+        # The binaries aren't notarized; without this macOS refuses to run them.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sprout"]
+          end
+
+release:
+  footer: |
+    **Install:** `brew install sprout-devlabs/tap/sprout` or `go install github.com/Sprout-DevLabs/sprout@{{ .Tag }}`
