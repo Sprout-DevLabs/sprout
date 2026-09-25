@@ -33,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
 	churn := fs.Bool("churn", false, "show how many commits touched each path (hotspots)")
 	since := fs.String("since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
+	aiMap := fs.Bool("ai", false, "print a compact project map for LLM prompts and agents")
+	budget := fs.Int("budget", 2000, "with --ai: approximate token budget")
 	diffRev := fs.String("diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -60,7 +62,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	opts := Options{
-		ShowHidden: *hidden || all,
+		// --ai wants .github/ and friends; ignore rules still drop the junk.
+		ShowHidden: *hidden || all || *aiMap,
 		MaxDepth:   depth,
 		Ignore:     splitPatterns(*ignore),
 		NoIgnore:   *noIgnore || all,
@@ -73,6 +76,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
+	}
+
+	if *aiMap {
+		fmt.Fprint(stdout, AIMap(tree, path, *budget))
+		return 0
 	}
 
 	if *asJSON {
