@@ -31,6 +31,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
 	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
 	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
+	churn := fs.Bool("churn", false, "show how many commits touched each path (hotspots)")
+	since := fs.String("since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
 	diffRev := fs.String("diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -65,6 +67,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	tree, branch, err := load(path, opts, *gitStatus, *diffRev)
+	if err == nil && *churn {
+		err = addChurn(path, tree, *since)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
@@ -84,6 +89,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	p := printer{w: stdout, color: useColor(stdout)}
+	if *churn {
+		p.churnFiles, p.churnDirs = churnMax(tree.Root)
+	}
 	header := paint(p.color, blue+";"+bold, path)
 	if branch != "" {
 		header += paint(p.color, dim, " "+branch)
@@ -96,6 +104,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printSummary(stdout, tree)
 	}
 	return 0
+}
+
+func addChurn(path string, t *Tree, since string) error {
+	repo, err := openRepo(path)
+	if err != nil {
+		return err
+	}
+	counts, err := repo.churn(since)
+	if err != nil {
+		return err
+	}
+	applyChurn(t.Root, counts)
+	return nil
 }
 
 // load builds the tree for the requested mode: a filesystem walk, optionally

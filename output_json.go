@@ -50,8 +50,9 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		Changes   int     `json:"changes,omitempty"`
 		Added     int     `json:"added,omitempty"`
 		Deleted   int     `json:"deleted,omitempty"`
+		Churn     int     `json:"churn,omitempty"`
 		Children  []*Node `json:"children,omitempty"`
-	}{n.Name, n.Rel, typ, n.Size, errMsg, n.Truncated, n.Status, n.Changes, n.Added, n.Deleted, n.Children})
+	}{n.Name, n.Rel, typ, n.Size, errMsg, n.Truncated, n.Status, n.Changes, n.Added, n.Deleted, n.Churn, n.Children})
 }
 
 func WriteJSON(w io.Writer, t *Tree, path string) error {

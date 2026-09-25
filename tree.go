@@ -30,6 +30,7 @@ type Node struct {
 	Changes   int    // directories: changed paths anywhere below
 	Added     int    // --diff: lines added (directories: total below)
 	Deleted   int    // --diff: lines deleted (directories: total below)
+	Churn     int    // --churn: commits that touched this path
 }
 
 // Tree is a walked directory plus what the walk left out.
@@ -158,6 +159,8 @@ func (n *Node) Count() (dirs, files int) {
 type printer struct {
 	w     io.Writer
 	color bool
+
+	churnFiles, churnDirs int // --churn scale; 0 when off
 }
 
 func (p printer) tree(node *Node, prefix string) {
@@ -191,6 +194,19 @@ func (p printer) label(n *Node) string {
 	}
 	if n.Added+n.Deleted > 0 {
 		name += "  " + paint(p.color, green, fmt.Sprintf("+%d", n.Added)) + " " + paint(p.color, red, fmt.Sprintf("-%d", n.Deleted))
+	}
+	if n.Churn > 0 {
+		scale := p.churnFiles
+		if n.IsDir {
+			scale = p.churnDirs
+		}
+		c := dim
+		if n.Churn*3 > scale*2 {
+			c = red
+		} else if n.Churn*3 > scale {
+			c = yellow
+		}
+		name += "  " + paint(p.color, c, churnBar(n.Churn, scale))
 	}
 	if n.Err != nil {
 		name += "  " + paint(p.color, red, "["+errReason(n.Err)+"]")
