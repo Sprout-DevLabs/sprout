@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -95,5 +96,34 @@ func TestBuildTreeNonExistentPath(t *testing.T) {
 	_, err := BuildTree(filepath.Join(t.TempDir(), "does-not-exist"), Options{})
 	if err == nil {
 		t.Error("expected an error for a non-existent path")
+	}
+}
+
+func TestUnreadableDirDoesNotAbortWalk(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod-based permission test needs a non-root Unix user")
+	}
+	dir := setupTestDir(t)
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	root, err := BuildTree(dir, Options{MaxDepth: -1})
+	if err != nil {
+		t.Fatalf("walk aborted: %v", err)
+	}
+	var found *Node
+	for _, c := range root.Children {
+		if c.Name == "locked" {
+			found = c
+		}
+	}
+	if found == nil || found.Err == nil {
+		t.Error("expected locked/ in the tree with its read error recorded")
+	}
+	if !childNames(root)["src"] {
+		t.Error("siblings of the unreadable dir should still be listed")
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,6 +43,30 @@ var languageNames = map[string]string{
 	".sql":  "SQL",
 }
 
+// fileNames covers well-known files that carry no extension.
+var fileNames = map[string]string{
+	"Makefile":   "Makefile",
+	"Dockerfile": "Dockerfile",
+	"Justfile":   "Justfile",
+	"Gemfile":    "Ruby",
+	"Rakefile":   "Ruby",
+}
+
+// languageOf returns a display label for a file, or "" if it has none.
+func languageOf(name string) string {
+	if lang, ok := fileNames[name]; ok {
+		return lang
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" || ext == name { // no extension, or a dotfile like .env
+		return ""
+	}
+	if lang, ok := languageNames[ext]; ok {
+		return lang
+	}
+	return strings.ToUpper(strings.TrimPrefix(ext, "."))
+}
+
 func collectStats(node *Node, s *Stats) {
 	for _, child := range node.Children {
 		if child.IsDir {
@@ -53,16 +78,9 @@ func collectStats(node *Node, s *Stats) {
 		s.Files++
 		s.TotalSize += child.Size
 
-		ext := strings.ToLower(filepath.Ext(child.Name))
-		if ext == "" {
-			continue
+		if lang := languageOf(child.Name); lang != "" {
+			s.Languages[lang]++
 		}
-
-		lang, ok := languageNames[ext]
-		if !ok {
-			lang = strings.ToUpper(strings.TrimPrefix(ext, "."))
-		}
-		s.Languages[lang]++
 	}
 }
 
@@ -80,14 +98,14 @@ func formatSize(bytes int64) string {
 }
 
 // PrintStats renders the my-project/ summary shown in the README's --stats example.
-func PrintStats(root *Node, path string) {
+func PrintStats(w io.Writer, root *Node, path string) {
 	s := &Stats{Languages: make(map[string]int)}
 	collectStats(root, s)
 
-	fmt.Printf("%s/\n", strings.TrimSuffix(path, "/"))
-	fmt.Printf("Files:          %d\n", s.Files)
-	fmt.Printf("Directories:    %d\n", s.Directories)
-	fmt.Printf("Total size:     %s\n", formatSize(s.TotalSize))
+	fmt.Fprintf(w, "%s/\n", strings.TrimSuffix(path, "/"))
+	fmt.Fprintf(w, "Files:          %d\n", s.Files)
+	fmt.Fprintf(w, "Directories:    %d\n", s.Directories)
+	fmt.Fprintf(w, "Total size:     %s\n", formatSize(s.TotalSize))
 
 	if len(s.Languages) == 0 {
 		return
@@ -108,8 +126,8 @@ func PrintStats(root *Node, path string) {
 		return langs[i].Name < langs[j].Name
 	})
 
-	fmt.Println("Languages:")
+	fmt.Fprintln(w, "Languages:")
 	for _, l := range langs {
-		fmt.Printf("  %-14s %d files\n", l.Name, l.Count)
+		fmt.Fprintf(w, "  %-14s %d files\n", l.Name, l.Count)
 	}
 }
