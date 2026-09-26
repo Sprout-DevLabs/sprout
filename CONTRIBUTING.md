@@ -32,14 +32,28 @@ we'd like to keep it that way.
 | File | What |
 |---|---|
 | `main.go` | Flags, usage, mode dispatch |
+| `config.go` | `~/.config/sprout/config` and `.sproutrc` |
 | `tree.go` | Walk, `Node`, tree printer |
-| `filter.go` | `.gitignore` via git, built-in ignores |
-| `git.go` | `--git` status, `--diff` |
-| `churn.go` | `--churn` |
-| `ai.go` | `--ai` map and budget fitting |
-| `output_json.go` | `--json` schema |
+| `filter.go` | gitignore-style matcher, `.sproutignore`, `.gitignore` via git |
+| `sort.go` | `--sort`, `--size` units, `--max-files`, `--changed-within` |
+| `git.go`, `churn.go` | `--git`, `--diff`, `--churn` |
+| `codegraph.go` | Declarations, imports and ranking for `--ai` and `--entry` |
+| `ai.go`, `entry.go` | `--ai` map, `--entry` reading order |
+| `remote.go` | Cloning `github.com/owner/repo` and other URLs |
 | `mcp.go` | `sprout mcp` server |
-| `stats.go`, `project.go` | `--stats`, stack detection |
+| `completion.go` | `--completion` and `--man`, generated from the flags |
+| `output_json.go`, `stats.go`, `project.go`, `color.go` | `--json`, `--stats`, stack detection, terminal output |
+
+## Performance
+
+`bench_test.go` runs every mode against a real repository:
+
+```bash
+git clone --depth 1 https://github.com/kubernetes/kubernetes /tmp/k8s
+SPROUT_BENCH_DIR=/tmp/k8s go test -run '^$' -bench .
+```
+
+Please include before/after numbers in performance PRs.
 
 ## Releasing (maintainers)
 
