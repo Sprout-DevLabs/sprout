@@ -61,7 +61,8 @@ var mcpTools = []mcpTool{
 	{
 		Name: "project_map",
 		Description: "Compact overview of a codebase for getting oriented: purpose, stack, languages, " +
-			"entry points, config/CI files, uncommitted work, recent hotspots, and directory structure, " +
+			"entry points, config/CI files, uncommitted work, recent hotspots, directory structure, and the " +
+			"most-used files with their function and type signatures, " +
 			"fitted to a token budget. Call this first in an unfamiliar repository.",
 		InputSchema: schema(map[string]any{
 			"budget": map[string]any{"type": "integer", "description": "Approximate token budget (default 2000)."},
@@ -105,6 +106,13 @@ var mcpTools = []mcpTool{
 			}
 			return args, nil
 		},
+	},
+	{
+		Name: "reading_order",
+		Description: "Where to start reading an unfamiliar codebase: the README, entry points, then the " +
+			"files the rest of the code imports most, with the reason for each.",
+		InputSchema: schema(map[string]any{}),
+		args:        func(a toolArgs) ([]string, error) { return []string{"--entry"}, nil },
 	},
 	{
 		Name: "diff_tree",
