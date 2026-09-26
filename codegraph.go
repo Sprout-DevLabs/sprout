@@ -73,7 +73,7 @@ func buildGraph(root string, t *Tree) *codeGraph {
 	walk(t.Root, func(n *Node) {
 		// Tests, vendored code and fixtures never vote or rank, so don't
 		// read them at all (in kubernetes that's most of the Go files).
-		if !n.IsDir && n.Path != "" && langOf(n.Name) != "" && len(paths) < maxGraphFiles &&
+		if !n.IsDir && !n.Missing && langOf(n.Name) != "" && len(paths) < maxGraphFiles &&
 			!isTestPath(n.Rel) && !isTestFile(n.Rel) {
 			paths = append(paths, n)
 		}
@@ -102,7 +102,7 @@ func buildGraph(root string, t *Tree) *codeGraph {
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				results[i].f, results[i].info = parseSource(paths[i], r)
+				results[i].f, results[i].info = parseSource(paths[i], t.FSPath(paths[i]), r)
 			}
 		}()
 	}
@@ -135,11 +135,11 @@ func buildGraph(root string, t *Tree) *codeGraph {
 
 // parseSource reads one file and resolves its imports. The resolver is
 // read-only, so this is safe to run concurrently.
-func parseSource(n *Node, r resolver) (*sourceFile, *goInfo) {
+func parseSource(n *Node, path string, r resolver) (*sourceFile, *goInfo) {
 	if n.Size > maxSourceSize {
 		return nil, nil
 	}
-	src, err := os.ReadFile(n.Path)
+	src, err := os.ReadFile(path)
 	if err != nil || bytes.IndexByte(src, 0) >= 0 {
 		return nil, nil
 	}
@@ -149,7 +149,7 @@ func parseSource(n *Node, r resolver) (*sourceFile, *goInfo) {
 	lang := langOf(n.Name)
 	if lang == "go" {
 		var gi goInfo
-		f.symbols, specs, gi = goDecls(n.Path, src)
+		f.symbols, specs, gi = goDecls(path, src)
 		info = &gi
 	} else {
 		f.symbols, specs = scanDecls(lang, src)

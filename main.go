@@ -281,6 +281,7 @@ func run(args []string, out, stderr io.Writer) int {
 	if f.links && isTerminal(out) { // never write escape codes into pipes
 		p.links = true
 		p.host, _ = os.Hostname()
+		p.fs = tree
 	}
 	if f.churn {
 		p.churnFiles, p.churnDirs = churnMax(tree.Root)

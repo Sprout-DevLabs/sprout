@@ -208,3 +208,37 @@ func write(t *testing.T, dir, rel, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestFSPath(t *testing.T) {
+	dir := setupTestDir(t)
+	tree, err := BuildTree(dir, Options{MaxDepth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tree.FSPath(tree.Root); got != dir {
+		t.Errorf("root FSPath = %q, want %q", got, dir)
+	}
+	var src *Node
+	for _, c := range tree.Root.Children {
+		if c.Name == "src" {
+			src = c
+		}
+	}
+	main := src.Children[0]
+	if got, want := tree.FSPath(main), filepath.Join(dir, "src", "main.go"); got != want {
+		t.Errorf("FSPath = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(tree.FSPath(main)); err != nil {
+		t.Errorf("FSPath doesn't point at the file: %v", err)
+	}
+	// A deleted file inserted from git status isn't on disk.
+	gone := insertPath(tree, "src/gone.go")
+	if got := tree.FSPath(gone); got != "" {
+		t.Errorf("inserted node FSPath = %q, want empty", got)
+	}
+	// Nor is anything in a --diff tree.
+	d := diffTree("x", map[string]*Node{"a/b.go": {Status: "M"}}, -1)
+	if got := d.FSPath(d.Root.Children[0].Children[0]); got != "" {
+		t.Errorf("diff tree FSPath = %q, want empty", got)
+	}
+}

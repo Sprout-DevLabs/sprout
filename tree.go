@@ -23,9 +23,9 @@ type Options struct {
 // Node is one file or directory in the tree.
 type Node struct {
 	Name     string
-	Path     string // filesystem path, for reading
-	Rel      string // slash-separated path relative to the root, for matching git output
+	Rel      string // slash-separated path relative to the root; Tree.FSPath gives the filesystem path
 	IsDir    bool
+	Missing  bool      // not on disk: inserted for a git deletion, or part of a --diff tree
 	Size     int64     // files: bytes; directories: total below, with Options.Sizes
 	ModTime  time.Time // directories: newest file below
 	Children []*Node
@@ -47,6 +47,21 @@ type Tree struct {
 	GitAware bool // .gitignore rules were applied
 
 	hides func(rel, name string, isDir bool) bool // the walk's filter, reused for inserted paths
+
+	Dir string // filesystem path the tree was walked from; "" for --diff trees
+}
+
+// FSPath is where n lives on disk, or "" for nodes that aren't on disk.
+// Nodes store only their relative path: rebuilding the full one on demand
+// saves an allocation and ~90 bytes per node on large repositories.
+func (t *Tree) FSPath(n *Node) string {
+	if t.Dir == "" || n.Missing {
+		return ""
+	}
+	if n.Rel == "" {
+		return t.Dir
+	}
+	return filepath.Join(t.Dir, filepath.FromSlash(n.Rel))
 }
 
 type walker struct {
@@ -84,9 +99,10 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 		w.only = compile(opts.Only)
 	}
 
-	node := &Node{Name: displayName(root), Path: root, IsDir: info.IsDir()}
+	t.Dir = root
+	node := &Node{Name: displayName(root), IsDir: info.IsDir()}
 	if node.IsDir {
-		if err := w.populate(node, 0); err != nil {
+		if err := w.populate(node, root, 0); err != nil {
 			return nil, err
 		}
 	} else {
@@ -121,7 +137,8 @@ func pruneEmpty(n *Node) bool {
 	return len(kept) > 0
 }
 
-func (w *walker) populate(node *Node, depth int) error {
+// populate fills node, the directory at dir on disk.
+func (w *walker) populate(node *Node, dir string, depth int) error {
 	// Past --depth nothing is shown, but with --size the walk continues so
 	// directory totals are true totals, not just what's visible.
 	beyond := w.opts.MaxDepth >= 0 && depth >= w.opts.MaxDepth
@@ -131,7 +148,7 @@ func (w *walker) populate(node *Node, depth int) error {
 	}
 
 	// os.ReadDir already returns entries sorted by name.
-	entries, err := os.ReadDir(node.Path)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if depth == 0 {
 			return err
@@ -142,11 +159,21 @@ func (w *walker) populate(node *Node, depth int) error {
 		return nil
 	}
 
+	// One allocation for every child node in this directory instead of one
+	// per node, and Children sized up front instead of grown by append.
+	// Children point into slab, which is safe only because it never grows
+	// past its capacity: at most one node per entry.
+	slab := make([]Node, 0, len(entries))
+	node.Children = make([]*Node, 0, len(entries))
+
 	for _, entry := range entries {
 		name := entry.Name()
 		rel := name
 		if node.Rel != "" {
 			rel = node.Rel + "/" + name
+			// Share rel's bytes rather than keeping the directory entry's
+			// own copy of the name alive.
+			name = rel[len(node.Rel)+1:]
 		}
 
 		if w.hides(rel, name, entry.IsDir()) || (w.visible != nil && !w.visible[rel]) {
@@ -170,15 +197,11 @@ func (w *walker) populate(node *Node, depth int) error {
 			continue
 		}
 
-		child := &Node{
-			Name:  name,
-			Path:  filepath.Join(node.Path, name),
-			Rel:   rel,
-			IsDir: entry.IsDir(),
-		}
+		slab = append(slab, Node{Name: name, Rel: rel, IsDir: entry.IsDir()})
+		child := &slab[len(slab)-1]
 
 		if child.IsDir {
-			if err := w.populate(child, depth+1); err != nil {
+			if err := w.populate(child, filepath.Join(dir, name), depth+1); err != nil {
 				return err
 			}
 		} else if info != nil {
@@ -223,6 +246,7 @@ type printer struct {
 	si    bool
 	links bool   // OSC 8 hyperlinks on names
 	host  string // for file:// links
+	fs    *Tree  // for links: where nodes live on disk
 
 	churnFiles, churnDirs int // --churn scale; 0 when off
 }
@@ -257,8 +281,10 @@ func (p printer) label(n *Node) string {
 	case n.Status == "D":
 		name = paint(p.color, red, name)
 	}
-	if p.links && n.Path != "" && n.Status != "D" {
-		name = hyperlink(name, n.Path, p.host)
+	if p.links && p.fs != nil && n.Status != "D" {
+		if path := p.fs.FSPath(n); path != "" {
+			name = hyperlink(name, path, p.host)
+		}
 	}
 	if p.sizes && (n.Size > 0 || !n.IsDir) {
 		name += "  " + paint(p.color, cyan, humanSize(n.Size, p.si))
