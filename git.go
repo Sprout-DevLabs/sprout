@@ -114,7 +114,7 @@ func insertPath(t *Tree, rel string) *Node {
 			cur = cur.Children[idx]
 			continue
 		}
-		child := &Node{Name: name, Rel: strings.Join(parts[:i+1], "/"), IsDir: i < len(parts)-1}
+		child := &Node{Name: name, Rel: strings.Join(parts[:i+1], "/"), IsDir: i < len(parts)-1, Missing: true}
 		cur.Children = append(cur.Children, nil)
 		copy(cur.Children[idx+1:], cur.Children[idx:])
 		cur.Children[idx] = child
