@@ -2,6 +2,16 @@ version: 2
 
 project_name: sprout
 
+before:
+  hooks:
+    # Completions and the man page are generated from the flag definitions.
+    - sh -c 'rm -rf completions manpages && mkdir completions manpages'
+    - sh -c 'go run . --completion bash > completions/sprout.bash'
+    - sh -c 'go run . --completion zsh > completions/_sprout'
+    - sh -c 'go run . --completion fish > completions/sprout.fish'
+    - sh -c 'go run . --completion powershell > completions/sprout.ps1'
+    - sh -c 'go run . --man > manpages/sprout.1'
+
 builds:
   - env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
@@ -14,7 +24,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    files: [README.md, LICENSE]
+    files: [README.md, LICENSE, completions/*, manpages/*]
 
 checksum:
   name_template: checksums.txt
@@ -36,6 +46,11 @@ homebrew_casks:
     homepage: https://sprout-devlabs.github.io/sprout-web/
     description: Map your codebase for you and your AI agent
     license: MIT
+    completions:
+      bash: completions/sprout.bash
+      zsh: completions/_sprout
+      fish: completions/sprout.fish
+    manpages: [manpages/sprout.1]
     hooks:
       post:
         # The binaries aren't notarized; without this macOS refuses to run them.
@@ -44,6 +59,36 @@ homebrew_casks:
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sprout"]
           end
 
+scoops:
+  - name: sprout
+    repository:
+      owner: Sprout-DevLabs
+      name: scoop-bucket
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: https://sprout-devlabs.github.io/sprout-web/
+    description: Map your codebase for you and your AI agent
+    license: MIT
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ end }}'
+
+nfpms:
+  - package_name: sprout
+    homepage: https://sprout-devlabs.github.io/sprout-web/
+    maintainer: Sprout DevLabs <https://github.com/Sprout-DevLabs>
+    description: Map your codebase for you and your AI agent.
+    license: MIT
+    formats: [deb, rpm, apk, archlinux]
+    recommends: [git]
+    contents:
+      - src: completions/sprout.bash
+        dst: /usr/share/bash-completion/completions/sprout
+      - src: completions/_sprout
+        dst: /usr/share/zsh/site-functions/_sprout
+      - src: completions/sprout.fish
+        dst: /usr/share/fish/vendor_completions.d/sprout.fish
+      - src: manpages/sprout.1
+        dst: /usr/share/man/man1/sprout.1
+
 release:
   footer: |
-    **Install:** `brew install sprout-devlabs/tap/sprout` or `go install github.com/Sprout-DevLabs/sprout@{{ .Tag }}`
+    **Install:** `brew install sprout-devlabs/tap/sprout` · `scoop bucket add sprout https://github.com/Sprout-DevLabs/scoop-bucket; scoop install sprout` · `.deb`/`.rpm`/`.apk` below · `go install github.com/Sprout-DevLabs/sprout@{{ .Tag }}` · or `curl -fsSL https://sprout-devlabs.github.io/sprout-web/install.sh | sh`

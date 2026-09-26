@@ -2,3 +2,5 @@
 /sprout.exe
 /dist/
 .DS_Store
+completions/
+manpages/
