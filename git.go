@@ -106,7 +106,7 @@ func insertPath(t *Tree, rel string) *Node {
 	cur := t.Root
 	parts := strings.Split(rel, "/")
 	for i, name := range parts {
-		if cur.Truncated || t.hides(name) {
+		if cur.Truncated || t.hides(strings.Join(parts[:i+1], "/"), name, i < len(parts)-1) {
 			return nil
 		}
 		idx := sort.Search(len(cur.Children), func(j int) bool { return cur.Children[j].Name >= name })
@@ -183,7 +183,7 @@ func (r *gitRepo) diff(rev string) (map[string]*Node, error) {
 // footprint reads at a glance. Directories sum their children's line counts;
 // below maxDepth (if >= 0) subtrees collapse into those totals.
 func diffTree(name string, files map[string]*Node, maxDepth int) *Tree {
-	t := &Tree{Root: &Node{Name: name, IsDir: true}, hides: func(string) bool { return false }}
+	t := &Tree{Root: &Node{Name: name, IsDir: true}, hides: func(string, string, bool) bool { return false }}
 	for p, f := range files {
 		n := insertPath(t, p)
 		n.Status, n.Added, n.Deleted = f.Status, f.Added, f.Deleted

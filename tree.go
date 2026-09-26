@@ -11,8 +11,9 @@ import (
 type Options struct {
 	ShowHidden bool
 	MaxDepth   int      // -1 means unlimited
-	Ignore     []string // user patterns, always applied
-	NoIgnore   bool     // disable .gitignore and the built-in ignore list
+	Ignore     []string // user patterns (gitignore syntax), always applied
+	Only       []string // if set, only files matching these patterns are shown
+	NoIgnore   bool     // disable .gitignore, .sproutignore and the built-in list
 }
 
 // Node is one file or directory in the tree.
@@ -39,12 +40,13 @@ type Tree struct {
 	Skipped  int  // entries hidden by dotfile or ignore rules
 	GitAware bool // .gitignore rules were applied
 
-	hides func(name string) bool // the walk's name filter, reused for inserted paths
+	hides func(rel, name string, isDir bool) bool // the walk's filter, reused for inserted paths
 }
 
 type walker struct {
 	opts    Options
-	ignore  []string
+	ignore  matcher
+	only    matcher         // nil: every file
 	visible map[string]bool // nil unless GitAware
 	skipped int
 }
@@ -55,18 +57,25 @@ type walker struct {
 // Ignore rules: inside a git work tree, .gitignore is the source of truth
 // (asked of git itself, so every gitignore feature is honoured). Outside git,
 // a built-in list of common build/dependency directories is used instead.
+// A .sproutignore in root and --ignore patterns apply on top of either.
 func BuildTree(root string, opts Options) (*Tree, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 
-	w := &walker{opts: opts, ignore: append([]string{".git"}, opts.Ignore...)}
+	patterns := []string{".git/"}
 	t := &Tree{}
+	w := &walker{opts: opts}
 	if !opts.NoIgnore {
 		if w.visible, t.GitAware = gitVisible(root); !t.GitAware {
-			w.ignore = append(w.ignore, defaultIgnores...)
+			patterns = append(patterns, defaultIgnores...)
 		}
+		patterns = append(patterns, readIgnoreFile(root)...)
+	}
+	w.ignore = compile(append(patterns, opts.Ignore...))
+	if len(opts.Only) > 0 {
+		w.only = compile(opts.Only)
 	}
 
 	node := &Node{Name: displayName(root), Path: root, IsDir: info.IsDir()}
@@ -78,12 +87,31 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 		node.Size = info.Size()
 	}
 
+	if w.only != nil {
+		pruneEmpty(node)
+	}
 	t.Root, t.Skipped, t.hides = node, w.skipped, w.hides
 	return t, nil
 }
 
-func (w *walker) hides(name string) bool {
-	return isIgnored(name, w.ignore) || (!w.opts.ShowHidden && name[0] == '.')
+func (w *walker) hides(rel, name string, isDir bool) bool {
+	return (!w.opts.ShowHidden && name[0] == '.') ||
+		w.ignore.match(rel, name, isDir) ||
+		(!isDir && w.only != nil && !w.only.match(rel, name, false))
+}
+
+// pruneEmpty drops directories left with nothing in them after --only.
+// Directories cut off by --depth or unreadable ones stay: we don't know
+// what's inside.
+func pruneEmpty(n *Node) bool {
+	kept := n.Children[:0]
+	for _, c := range n.Children {
+		if !c.IsDir || pruneEmpty(c) || c.Truncated || c.Err != nil {
+			kept = append(kept, c)
+		}
+	}
+	n.Children = kept
+	return len(kept) > 0
 }
 
 func (w *walker) populate(node *Node, depth int) error {
@@ -111,7 +139,7 @@ func (w *walker) populate(node *Node, depth int) error {
 			rel = node.Rel + "/" + name
 		}
 
-		if w.hides(name) || (w.visible != nil && !w.visible[rel]) {
+		if w.hides(rel, name, entry.IsDir()) || (w.visible != nil && !w.visible[rel]) {
 			w.skipped++
 			continue
 		}
