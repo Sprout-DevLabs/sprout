@@ -17,7 +17,9 @@ Usage:
 
 Views:
   (default)               tree of the project, respecting .gitignore
-  --ai                    compact project map for LLM prompts; --budget N tokens (default 2000)
+  --ai                    compact project map for LLM prompts, with key files and their
+                          signatures; --budget N tokens (default 2000)
+  --entry                 where to start reading: README, entry points, most imported files
   --diff REV              only what changed in REV, e.g. main...HEAD or HEAD~3
   --stats                 files, size, languages, detected stack
   --json                  tree and stats as JSON (schemaVersion 1)
@@ -69,6 +71,7 @@ func main() {
 type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
+	entry                                 bool
 	size, si, reverse, dirsFirst, links   bool
 	depth, budget, maxFiles               int
 	ignore, only                          patternList
@@ -104,6 +107,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.churn, "churn", false, "show how many commits touched each path (hotspots)")
 	fs.StringVar(&f.since, "since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
 	fs.BoolVar(&f.ai, "ai", false, "print a compact project map for LLM prompts and agents")
+	fs.BoolVar(&f.entry, "entry", false, "suggest a reading order: README, entry points, then the most imported files")
 	fs.IntVar(&f.budget, "budget", 2000, "with --ai: approximate token budget")
 	fs.StringVar(&f.diff, "diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
 	fs.BoolVar(&f.showVers, "version", false, "print version and exit")
@@ -183,7 +187,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	opts := Options{
 		// --ai wants .github/ and friends; ignore rules still drop the junk.
-		ShowHidden: f.hidden || f.all || f.ai,
+		ShowHidden: f.hidden || f.all || f.ai || f.entry,
 		MaxDepth:   f.depth,
 		Ignore:     f.ignore,
 		Only:       f.only,
@@ -207,6 +211,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if f.maxFiles > 0 && !f.ai {
 		capFiles(tree.Root, f.maxFiles)
+	}
+
+	if f.entry {
+		steps := readingOrder(path, tree, buildGraph(path, tree), 15)
+		printReadingOrder(stdout, tree.Root.Name, steps)
+		return 0
 	}
 
 	if f.ai {

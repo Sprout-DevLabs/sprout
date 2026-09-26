@@ -52,8 +52,18 @@ func AIMap(t *Tree, root string, budget int) string {
 		fmt.Fprintf(&b, "config: %s\n", strings.Join(config, ", "))
 	}
 
+	// The structure gets three fifths of what's left and the key files the
+	// rest, plus whatever the structure didn't need.
+	ranked := buildGraph(root, t).ranked()
 	b.WriteString("\n## structure\n")
-	b.WriteString(fitStructure(t.Root, budget-estimateTokens(b.String())))
+	remaining := budget - estimateTokens(b.String())
+	share := remaining
+	if len(ranked) > 0 {
+		share = remaining * 3 / 5
+	}
+	structure := fitStructure(t.Root, share)
+	b.WriteString(structure)
+	writeKeyFiles(&b, ranked, remaining-estimateTokens(structure))
 	return b.String()
 }
 
