@@ -19,8 +19,8 @@ func estimateTokens(s string) int { return (len(s) + 3) / 4 }
 // matter, and what's changing — fitted to about budget tokens.
 func AIMap(t *Tree, root string, budget int) string {
 	// Parse sources while git works out status and history.
-	graph := make(chan *codeGraph, 1)
-	go func() { graph <- buildGraph(root, t) }()
+	graph := make(chan *Graph, 1)
+	go func() { graph <- buildGraph(root, t, false) }()
 
 	var b strings.Builder
 	s := &Stats{Languages: map[string]int{}}
@@ -58,7 +58,8 @@ func AIMap(t *Tree, root string, budget int) string {
 
 	// The structure gets three fifths of what's left and the key files the
 	// rest, plus whatever the structure didn't need.
-	ranked := (<-graph).ranked()
+	g := <-graph
+	ranked := g.Ranked()
 	b.WriteString("\n## structure\n")
 	remaining := budget - estimateTokens(b.String())
 	share := remaining
@@ -67,7 +68,7 @@ func AIMap(t *Tree, root string, budget int) string {
 	}
 	structure := fitStructure(t.Root, share)
 	b.WriteString(structure)
-	writeKeyFiles(&b, ranked, remaining-estimateTokens(structure))
+	writeKeyFiles(&b, g, ranked, remaining-estimateTokens(structure))
 	return b.String()
 }
 

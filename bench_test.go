@@ -70,3 +70,29 @@ func BenchmarkTreeMemory(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGraph times building the dependency graph alone (the tree is
+// built once, outside the timer), without and with test files.
+func BenchmarkGraph(b *testing.B) {
+	dir := os.Getenv("SPROUT_BENCH_DIR")
+	if dir == "" {
+		b.Skip("set SPROUT_BENCH_DIR to a large repository")
+	}
+	t, err := BuildTree(dir, Options{MaxDepth: -1, ShowHidden: true, Stat: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, tests := range []bool{false, true} {
+		name := "no-tests"
+		if tests {
+			name = "with-tests"
+		}
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				g := buildGraph(dir, t, tests)
+				b.ReportMetric(float64(len(g.Files)), "files")
+				b.ReportMetric(float64(len(g.fwd)), "edges")
+			}
+		})
+	}
+}
