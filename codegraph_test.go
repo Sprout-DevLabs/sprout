@@ -130,3 +130,22 @@ func TestEntryAndAIKeyFiles(t *testing.T) {
 		t.Errorf("--ai key files:\n%s", out)
 	}
 }
+
+func TestTrimDecl(t *testing.T) {
+	cases := map[string]string{
+		"export class HTTPError<T = unknown> extends KyError {":              "export class HTTPError<T = unknown> extends KyError",
+		"export type KyRequest<T = unknown> = {":                             "export type KyRequest<T = unknown>",
+		"export type SearchParamsOption =":                                   "export type SearchParamsOption",
+		"export const handler = async (req: Request) => {":                   "export const handler",
+		"export function get(url: string, opts: Options = {}): Promise<R> {": "export function get(url: string, opts: Options = {}): Promise<R>",
+		"def run(argv: list[str] = None) -> int:":                            "def run(argv: list[str] = None) -> int",
+		"def long_one(": "def long_one(…)",
+		"pub fn new<T: Into<String>>(name: T) -> Self {":             "pub fn new<T: Into<String>>(name: T) -> Self",
+		"export function isOk(x: number): boolean { return x >= 0 }": "export function isOk(x: number): boolean",
+	}
+	for in, want := range cases {
+		if got := trimDecl(in); got != want {
+			t.Errorf("trimDecl(%q)\n got  %q\n want %q", in, got, want)
+		}
+	}
+}

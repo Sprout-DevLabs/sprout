@@ -112,7 +112,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.churn, "churn", false, "show how many commits touched each path (hotspots)")
 	fs.StringVar(&f.since, "since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
 	fs.BoolVar(&f.ai, "ai", false, "print a compact project map for LLM prompts and agents")
-	fs.BoolVar(&f.entry, "entry", false, "suggest a reading order: README, entry points, then the most imported files")
+	fs.BoolVar(&f.entry, "entry", false, "suggest a reading order: README, entry points, then the most used files")
 	fs.IntVar(&f.budget, "budget", 2000, "with --ai: approximate token budget")
 	fs.StringVar(&f.diff, "diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
 	fs.StringVar(&f.complete, "completion", "", "print a shell completion script: bash, zsh, fish or powershell")
