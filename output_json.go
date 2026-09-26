@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"path/filepath"
+	"time"
 )
 
 // jsonSchemaVersion is bumped on any breaking change to the --json shape.
@@ -35,7 +36,10 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 	if n.IsDir {
 		typ = "directory"
 	}
-	var errMsg string
+	var errMsg, modified string
+	if !n.ModTime.IsZero() {
+		modified = n.ModTime.UTC().Format(time.RFC3339)
+	}
 	if n.Err != nil {
 		errMsg = errReason(n.Err)
 	}
@@ -44,6 +48,7 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		Path      string  `json:"path,omitempty"`
 		Type      string  `json:"type"`
 		Size      int64   `json:"size,omitempty"`
+		Modified  string  `json:"modified,omitempty"`
 		Error     string  `json:"error,omitempty"`
 		Truncated bool    `json:"truncated,omitempty"`
 		Status    string  `json:"status,omitempty"`
@@ -52,7 +57,7 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		Deleted   int     `json:"deleted,omitempty"`
 		Churn     int     `json:"churn,omitempty"`
 		Children  []*Node `json:"children,omitempty"`
-	}{n.Name, n.Rel, typ, n.Size, errMsg, n.Truncated, n.Status, n.Changes, n.Added, n.Deleted, n.Churn, n.Children})
+	}{n.Name, n.Rel, typ, n.Size, modified, errMsg, n.Truncated, n.Status, n.Changes, n.Added, n.Deleted, n.Churn, n.Children})
 }
 
 func WriteJSON(w io.Writer, t *Tree, path string) error {
