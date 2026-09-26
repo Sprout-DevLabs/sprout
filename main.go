@@ -29,8 +29,9 @@ Filtering:
   -L, --depth N           limit depth
   -a, --all               show hidden and ignored entries
   --hidden                show dotfiles
-  --no-ignore             skip .gitignore and the built-in ignore list
-  --ignore LIST           extra names/globs to hide, comma-separated: '*.log,fixtures'
+  --no-ignore             skip .gitignore, .sproutignore and the built-in ignore list
+  --ignore PATTERNS       hide matches (gitignore syntax): '*.log', 'src/gen/', 'docs/**/*.png'
+  --only PATTERNS         show only matching files: '*.go', 'web/src/**/*.tsx'
 
   --version               print version
 
@@ -64,7 +65,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var depth int
 	fs.IntVar(&depth, "depth", -1, "limit directory depth (-1 for unlimited)")
 	fs.IntVar(&depth, "L", -1, "shorthand for --depth")
-	ignore := fs.String("ignore", "", "comma-separated names/globs to ignore, e.g. '*.log,fixtures'")
+	var ignore, only patternList
+	fs.Var(&ignore, "ignore", "gitignore-style patterns to hide, comma-separated or repeated")
+	fs.Var(&only, "only", "show only files matching these patterns, e.g. '*.go' or 'src/**/*.ts'")
 	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
 	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
 	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
@@ -104,7 +107,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// --ai wants .github/ and friends; ignore rules still drop the junk.
 		ShowHidden: *hidden || all || *aiMap,
 		MaxDepth:   depth,
-		Ignore:     splitPatterns(*ignore),
+		Ignore:     ignore,
+		Only:       only,
 		NoIgnore:   *noIgnore || all,
 	}
 

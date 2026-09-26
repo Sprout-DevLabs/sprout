@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -30,25 +32,123 @@ var defaultIgnores = []string{
 	"*.egg-info",
 }
 
-// splitPatterns parses the comma-separated --ignore value.
-func splitPatterns(s string) []string {
-	var patterns []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			patterns = append(patterns, p)
+// patternList is a repeatable, comma-separated flag: --ignore a,b --ignore c.
+type patternList []string
+
+func (p *patternList) String() string { return strings.Join(*p, ",") }
+
+func (p *patternList) Set(v string) error {
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			*p = append(*p, s)
 		}
 	}
-	return patterns
+	return nil
 }
 
-// isIgnored checks a bare file/dir name against glob-style patterns.
-func isIgnored(name string, patterns []string) bool {
-	for _, pattern := range patterns {
-		if matched, _ := filepath.Match(pattern, name); matched {
-			return true
+// rule is one gitignore-style pattern. Patterns without a slash match a
+// name at any depth; patterns with one match the path from the root.
+type rule struct {
+	re       *regexp.Regexp
+	neg      bool
+	dirOnly  bool
+	anchored bool
+}
+
+// matcher applies rules in order; the last one that matches wins, so a
+// later "!keep.log" re-includes what an earlier "*.log" excluded.
+type matcher []rule
+
+func compile(patterns []string) matcher {
+	var m matcher
+	for _, p := range patterns {
+		p = strings.TrimRight(p, " \t\r")
+		if p == "" || strings.HasPrefix(p, "#") {
+			continue
+		}
+		var r rule
+		if r.neg = strings.HasPrefix(p, "!"); r.neg {
+			p = p[1:]
+		}
+		if r.dirOnly = strings.HasSuffix(p, "/"); r.dirOnly {
+			p = strings.TrimRight(p, "/")
+		}
+		r.anchored = strings.Contains(p, "/")
+		p = strings.TrimPrefix(p, "/")
+		re, err := regexp.Compile("^" + globRegexp(p) + "$")
+		if err != nil {
+			continue // a malformed pattern shouldn't take the whole walk down
+		}
+		r.re = re
+		m = append(m, r)
+	}
+	return m
+}
+
+// match reports whether the entry at rel (slash-separated, relative to
+// the root) is selected by the rules.
+func (m matcher) match(rel, name string, isDir bool) bool {
+	matched := false
+	for _, r := range m {
+		if r.dirOnly && !isDir {
+			continue
+		}
+		subject := name
+		if r.anchored {
+			subject = rel
+		}
+		if r.re.MatchString(subject) {
+			matched = !r.neg
 		}
 	}
-	return false
+	return matched
+}
+
+// globRegexp translates gitignore glob syntax: * and ? stay within one
+// path segment, ** crosses segments, [...] is a character class.
+func globRegexp(g string) string {
+	var b strings.Builder
+	for i := 0; i < len(g); i++ {
+		switch c := g[i]; {
+		case strings.HasPrefix(g[i:], "**/"):
+			b.WriteString("(?:.*/)?")
+			i += 2
+		case strings.HasPrefix(g[i:], "**"):
+			b.WriteString(".*")
+			i++
+		case c == '*':
+			b.WriteString("[^/]*")
+		case c == '?':
+			b.WriteString("[^/]")
+		case c == '[':
+			j := strings.IndexByte(g[i+1:], ']')
+			if j < 0 {
+				b.WriteString(`\[`)
+				continue
+			}
+			class := g[i+1 : i+1+j]
+			if strings.HasPrefix(class, "!") {
+				class = "^" + class[1:]
+			}
+			b.WriteString("[" + strings.ReplaceAll(class, `\`, `\\`) + "]")
+			i += j + 1
+		case c == '\\' && i+1 < len(g):
+			i++
+			b.WriteString(regexp.QuoteMeta(g[i : i+1]))
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	return b.String()
+}
+
+// readIgnoreFile returns the patterns in root/.sproutignore, if any.
+func readIgnoreFile(root string) []string {
+	data, err := os.ReadFile(filepath.Join(root, ".sproutignore"))
+	if err != nil {
+		return nil
+	}
+	return strings.Split(string(data), "\n")
 }
 
 // gitVisible asks git which paths under root belong to the project: tracked
