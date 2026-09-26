@@ -25,6 +25,7 @@ func benchRun(b *testing.B, args ...string) {
 func BenchmarkTree(b *testing.B)       { benchRun(b) }
 func BenchmarkTreeDepth2(b *testing.B) { benchRun(b, "-L", "2") }
 func BenchmarkJSON(b *testing.B)       { benchRun(b, "--json") }
+func BenchmarkJSONPretty(b *testing.B) { benchRun(b, "--json", "--pretty") }
 func BenchmarkSize(b *testing.B)       { benchRun(b, "--size", "-L", "1") }
 func BenchmarkEntry(b *testing.B)      { benchRun(b, "--entry") }
 func BenchmarkAI(b *testing.B)         { benchRun(b, "--ai") }

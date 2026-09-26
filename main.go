@@ -25,7 +25,7 @@ Views:
   --entry                 where to start reading: README, entry points, most imported files
   --diff REV              only what changed in REV, e.g. main...HEAD or HEAD~3
   --stats                 files, size, languages, detected stack
-  --json                  tree and stats as JSON (schemaVersion 1)
+  --json                  tree and stats as compact JSON (schemaVersion 1); --pretty indents it
 
 Sizes and order:
   --size                  file sizes and true directory totals (du-style, even past --depth)
@@ -76,7 +76,7 @@ func main() {
 type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
-	entry, man                            bool
+	entry, man, pretty                    bool
 	size, si, reverse, dirsFirst, links   bool
 	depth, budget, maxFiles               int
 	ignore, only                          patternList
@@ -108,6 +108,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.dirsFirst, "dirs-first", false, "list directories before files")
 	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
 	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
+	fs.BoolVar(&f.pretty, "pretty", false, "with --json: indent the output for reading")
 	fs.BoolVar(&f.git, "git", false, "mark changed files with their git status")
 	fs.BoolVar(&f.churn, "churn", false, "show how many commits touched each path (hotspots)")
 	fs.StringVar(&f.since, "since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
@@ -264,7 +265,7 @@ func run(args []string, out, stderr io.Writer) int {
 	}
 
 	if f.json {
-		if err := WriteJSON(stdout, tree, path); err != nil {
+		if err := WriteJSON(stdout, tree, path, f.pretty); err != nil {
 			fmt.Fprintln(stderr, "sprout:", err)
 			return 1
 		}
