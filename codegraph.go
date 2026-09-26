@@ -340,14 +340,41 @@ func scanDecls(lang string, src []byte) (symbols, imports []string) {
 	return symbols, imports
 }
 
-// trimDecl keeps a declaration's signature and drops its body or value.
+// trimDecl keeps a declaration's signature and drops its body or value:
+// it cuts at the first "{" or "=" outside brackets, so generic defaults
+// like <T = unknown> and default arguments survive.
 func trimDecl(s string) string {
-	s = strings.TrimSpace(s)
-	for _, cut := range []string{" {", "{", " = ", " =>"} {
-		if i := strings.Index(s, cut); i > 0 {
-			s = s[:i]
+	depth := 0
+	cut := len(s)
+scan:
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '<':
+			depth++
+		case ')', ']':
+			depth--
+		case '>':
+			if i > 0 && s[i-1] == '=' { // "=>" is an arrow, not a bracket
+				continue
+			}
+			depth--
+		case '{':
+			if depth <= 0 {
+				cut = i
+				break scan
+			}
+		case '=':
+			next := byte(0)
+			if i+1 < len(s) {
+				next = s[i+1]
+			}
+			if depth <= 0 && next != '=' && next != '>' {
+				cut = i
+				break scan
+			}
 		}
 	}
+	s = strings.TrimSpace(s[:cut])
 	s = strings.TrimSuffix(strings.TrimSuffix(s, ":"), ";")
 	if strings.HasSuffix(s, "(") {
 		s += "…)" // parameters continue on the next lines
