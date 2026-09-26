@@ -10,8 +10,11 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // The code graph gives --ai and --entry what a tree can't: the top-level
@@ -25,7 +28,7 @@ import (
 // (tsconfig "@/..."); tree-sitter would fix both at the cost of cgo.
 
 const (
-	maxGraphFiles = 5000
+	maxGraphFiles = 50000
 	maxSourceSize = 512 << 10
 )
 
@@ -68,10 +71,15 @@ func buildGraph(root string, t *Tree) *codeGraph {
 	g := &codeGraph{files: map[string]*sourceFile{}}
 	var paths []*Node
 	walk(t.Root, func(n *Node) {
-		if !n.IsDir && n.Path != "" && langOf(n.Name) != "" && len(paths) < maxGraphFiles {
+		// Tests, vendored code and fixtures never vote or rank, so don't
+		// read them at all (in kubernetes that's most of the Go files).
+		if !n.IsDir && n.Path != "" && langOf(n.Name) != "" && len(paths) < maxGraphFiles &&
+			!isTestPath(n.Rel) && !isTestFile(n.Rel) {
 			paths = append(paths, n)
 		}
 	})
+	// Parsing allocates heavily and briefly; trade some memory for less GC.
+	defer debug.SetGCPercent(debug.SetGCPercent(400))
 
 	exists := map[string]bool{}
 	byDir := map[string][]string{}
@@ -80,40 +88,42 @@ func buildGraph(root string, t *Tree) *codeGraph {
 		byDir[path.Dir(n.Rel)] = append(byDir[path.Dir(n.Rel)], n.Rel)
 	}
 	r := resolver{exists: exists, byDir: byDir, goModule: goModulePath(root), javaIndex: javaIndex(paths)}
-	goFiles := map[string]goInfo{}
 
-	for _, n := range paths {
-		if n.Size > maxSourceSize {
-			continue
-		}
-		src, err := os.ReadFile(n.Path)
-		if err != nil || bytes.IndexByte(src, 0) >= 0 {
-			continue
-		}
-		f := &sourceFile{rel: n.Rel, imports: map[string]bool{}}
-		var specs []string
-		switch langOf(n.Name) {
-		case "go":
-			var info goInfo
-			f.symbols, specs, info = goDecls(n.Path, src)
-			goFiles[n.Rel] = info
-		default:
-			f.symbols, specs = scanDecls(langOf(n.Name), src)
-		}
-		for _, spec := range specs {
-			for _, target := range r.resolve(langOf(n.Name), n.Rel, spec) {
-				if target != n.Rel {
-					f.imports[target] = true
-				}
+	// Parse in parallel: reading and parsing dominate on large repos.
+	type result struct {
+		f    *sourceFile
+		info *goInfo
+	}
+	results := make([]result, len(paths))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < runtime.NumCPU(); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				results[i].f, results[i].info = parseSource(paths[i], r)
 			}
+		}()
+	}
+	for i := range paths {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+
+	goFiles := map[string]goInfo{}
+	for _, res := range results {
+		if res.f == nil {
+			continue
 		}
-		g.files[n.Rel] = f
+		g.files[res.f.rel] = res.f
+		if res.info != nil {
+			goFiles[res.f.rel] = *res.info
+		}
 	}
 	linkGoPackages(g, goFiles)
-	for _, f := range g.files {
-		if isTestPath(f.rel) || isTestFile(f.rel) {
-			continue // tests import everything; only real code votes
-		}
+	for _, f := range g.files { // tests were never read, so only real code votes
 		for target := range f.imports {
 			if tf := g.files[target]; tf != nil {
 				tf.importedBy++
@@ -121,6 +131,37 @@ func buildGraph(root string, t *Tree) *codeGraph {
 		}
 	}
 	return g
+}
+
+// parseSource reads one file and resolves its imports. The resolver is
+// read-only, so this is safe to run concurrently.
+func parseSource(n *Node, r resolver) (*sourceFile, *goInfo) {
+	if n.Size > maxSourceSize {
+		return nil, nil
+	}
+	src, err := os.ReadFile(n.Path)
+	if err != nil || bytes.IndexByte(src, 0) >= 0 {
+		return nil, nil
+	}
+	f := &sourceFile{rel: n.Rel, imports: map[string]bool{}}
+	var specs []string
+	var info *goInfo
+	lang := langOf(n.Name)
+	if lang == "go" {
+		var gi goInfo
+		f.symbols, specs, gi = goDecls(n.Path, src)
+		info = &gi
+	} else {
+		f.symbols, specs = scanDecls(lang, src)
+	}
+	for _, spec := range specs {
+		for _, target := range r.resolve(lang, n.Rel, spec) {
+			if target != n.Rel {
+				f.imports[target] = true
+			}
+		}
+	}
+	return f, info
 }
 
 func langOf(name string) string {
