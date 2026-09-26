@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"time"
 )
 
 const usage = `sprout: map your codebase, for you and your AI agent
@@ -37,6 +38,7 @@ Filtering:
   --no-ignore             skip .gitignore, .sproutignore and the built-in ignore list
   --ignore PATTERNS       hide matches (gitignore syntax): '*.log', 'src/gen/', 'docs/**/*.png'
   --only PATTERNS         show only matching files: '*.go', 'web/src/**/*.tsx'
+  --changed-within AGE    only files modified recently: 30m, 12h, 7d, 2w
 
 Config:
   ~/.config/sprout/config and the nearest .sproutrc hold default flags, one per line.
@@ -68,7 +70,7 @@ type flags struct {
 	size, si, reverse, dirsFirst          bool
 	depth, budget                         int
 	ignore, only                          patternList
-	since, diff, sortBy                   string
+	since, diff, sortBy, within           string
 }
 
 func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
@@ -90,6 +92,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.StringVar(&f.sortBy, "sort", "name", "order entries by name, size (largest first) or time (newest first)")
 	fs.BoolVar(&f.reverse, "reverse", false, "reverse the sort order")
 	fs.BoolVar(&f.reverse, "r", false, "shorthand for --reverse")
+	fs.StringVar(&f.within, "changed-within", "", "only files modified within this long, e.g. 30m, 12h, 7d, 2w")
 	fs.BoolVar(&f.dirsFirst, "dirs-first", false, "list directories before files")
 	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
 	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
@@ -154,6 +157,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	var since time.Time
+	if f.within != "" {
+		age, err := parseAge(f.within)
+		if err != nil {
+			fmt.Fprintln(stderr, "sprout:", err)
+			return 2
+		}
+		since = time.Now().Add(-age)
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
@@ -172,6 +185,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Only:       f.only,
 		NoIgnore:   f.noIgnore || f.all,
 		Sizes:      f.size || f.sortBy != "name", // sorting a collapsed folder needs what's inside it
+		Since:      since,
 	}
 
 	tree, branch, err := load(path, opts, f.git, f.diff)

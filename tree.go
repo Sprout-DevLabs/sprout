@@ -11,11 +11,12 @@ import (
 // Options controls how the tree is built.
 type Options struct {
 	ShowHidden bool
-	MaxDepth   int      // -1 means unlimited
-	Ignore     []string // user patterns (gitignore syntax), always applied
-	Only       []string // if set, only files matching these patterns are shown
-	NoIgnore   bool     // disable .gitignore, .sproutignore and the built-in list
-	Sizes      bool     // measure past MaxDepth: true directory sizes and newest times
+	MaxDepth   int       // -1 means unlimited
+	Ignore     []string  // user patterns (gitignore syntax), always applied
+	Only       []string  // if set, only files matching these patterns are shown
+	NoIgnore   bool      // disable .gitignore, .sproutignore and the built-in list
+	Sizes      bool      // measure past MaxDepth: true directory sizes and newest times
+	Since      time.Time // if set, only files modified at or after this time
 }
 
 // Node is one file or directory in the tree.
@@ -90,7 +91,7 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 		node.Size = info.Size()
 	}
 
-	if w.only != nil {
+	if w.only != nil || !opts.Since.IsZero() {
 		pruneEmpty(node)
 	}
 	t.Root, t.Skipped, t.hides = node, w.skipped, w.hides
@@ -103,7 +104,8 @@ func (w *walker) hides(rel, name string, isDir bool) bool {
 		(!isDir && w.only != nil && !w.only.match(rel, name, false))
 }
 
-// pruneEmpty drops directories left with nothing in them after --only.
+// pruneEmpty drops directories left with nothing in them after --only or
+// --changed-within.
 // Directories cut off by --depth or unreadable ones stay: we don't know
 // what's inside.
 func pruneEmpty(n *Node) bool {
@@ -155,6 +157,12 @@ func (w *walker) populate(node *Node, depth int) error {
 		info, err := entry.Info()
 		if err != nil {
 			continue // vanished between ReadDir and Lstat
+		}
+		if !w.opts.Since.IsZero() && !entry.IsDir() && info.ModTime().Before(w.opts.Since) {
+			if !beyond {
+				w.skipped++
+			}
+			continue
 		}
 
 		child := &Node{
