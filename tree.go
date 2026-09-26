@@ -217,6 +217,8 @@ type printer struct {
 	color bool
 	sizes bool // show sizes; si picks powers of 1000
 	si    bool
+	links bool   // OSC 8 hyperlinks on names
+	host  string // for file:// links
 
 	churnFiles, churnDirs int // --churn scale; 0 when off
 }
@@ -250,6 +252,9 @@ func (p printer) label(n *Node) string {
 		name = paint(p.color, blue+";"+bold, name+"/")
 	case n.Status == "D":
 		name = paint(p.color, red, name)
+	}
+	if p.links && n.Path != "" && n.Status != "D" {
+		name = hyperlink(name, n.Path, p.host)
 	}
 	if p.sizes && (n.Size > 0 || !n.IsDir) {
 		name += "  " + paint(p.color, cyan, humanSize(n.Size, p.si))

@@ -40,6 +40,7 @@ Filtering:
   --only PATTERNS         show only matching files: '*.go', 'web/src/**/*.tsx'
   --changed-within AGE    only files modified recently: 30m, 12h, 7d, 2w
   --max-files N           list at most N files per folder, then "… 37 more files"
+  --hyperlink             clickable names in terminals that support links (put it in your config)
 
 Config:
   ~/.config/sprout/config and the nearest .sproutrc hold default flags, one per line.
@@ -68,7 +69,7 @@ func main() {
 type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
-	size, si, reverse, dirsFirst          bool
+	size, si, reverse, dirsFirst, links   bool
 	depth, budget, maxFiles               int
 	ignore, only                          patternList
 	since, diff, sortBy, within           string
@@ -95,6 +96,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.reverse, "r", false, "shorthand for --reverse")
 	fs.StringVar(&f.within, "changed-within", "", "only files modified within this long, e.g. 30m, 12h, 7d, 2w")
 	fs.IntVar(&f.maxFiles, "max-files", 0, "list at most N files per directory (0 for all)")
+	fs.BoolVar(&f.links, "hyperlink", false, "make names clickable in terminals that support OSC 8 links")
 	fs.BoolVar(&f.dirsFirst, "dirs-first", false, "list directories before files")
 	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
 	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
@@ -226,6 +228,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	p := printer{w: stdout, color: useColor(stdout), sizes: f.size, si: f.si}
+	if f.links && isTerminal(stdout) { // never write escape codes into pipes
+		p.links = true
+		p.host, _ = os.Hostname()
+	}
 	if f.churn {
 		p.churnFiles, p.churnDirs = churnMax(tree.Root)
 	}
