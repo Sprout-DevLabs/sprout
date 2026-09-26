@@ -50,6 +50,8 @@ Config:
   ~/.config/sprout/config and the nearest .sproutrc hold default flags, one per line.
   --no-config             ignore them for this run
 
+  --completion SHELL      print completions for bash, zsh, fish or powershell
+  --man                   print the man page
   --version               print version
 
 Examples:
@@ -73,11 +75,11 @@ func main() {
 type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
-	entry                                 bool
+	entry, man                            bool
 	size, si, reverse, dirsFirst, links   bool
 	depth, budget, maxFiles               int
 	ignore, only                          patternList
-	since, diff, sortBy, within           string
+	since, diff, sortBy, within, complete string
 }
 
 func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
@@ -112,6 +114,8 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.entry, "entry", false, "suggest a reading order: README, entry points, then the most imported files")
 	fs.IntVar(&f.budget, "budget", 2000, "with --ai: approximate token budget")
 	fs.StringVar(&f.diff, "diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
+	fs.StringVar(&f.complete, "completion", "", "print a shell completion script: bash, zsh, fish or powershell")
+	fs.BoolVar(&f.man, "man", false, "print the man page (roff)")
 	fs.BoolVar(&f.showVers, "version", false, "print version and exit")
 	return fs
 }
@@ -121,7 +125,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 func parseFlags(args []string, stderr io.Writer) (*flags, string, error) {
 	f := &flags{}
 	path, err := parseArgs(newFlagSet(f, stderr), args)
-	if err != nil || f.noConfig || f.showVers {
+	if err != nil || f.noConfig || f.showVers || f.man || f.complete != "" {
 		return f, path, err
 	}
 	dir := path
@@ -163,6 +167,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if f.showVers {
 		fmt.Fprintln(stdout, "sprout", resolveVersion())
+		return 0
+	}
+	if f.man {
+		writeManPage(stdout)
+		return 0
+	}
+	if f.complete != "" {
+		if err := writeCompletion(stdout, f.complete); err != nil {
+			fmt.Fprintln(stderr, "sprout:", err)
+			return 2
+		}
 		return 0
 	}
 
