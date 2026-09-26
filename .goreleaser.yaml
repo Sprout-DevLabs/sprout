@@ -31,6 +31,8 @@ homebrew_casks:
       owner: Sprout-DevLabs
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Publish the GitHub release even before the tap token is configured.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ end }}'
     homepage: https://sprout-devlabs.github.io/sprout-web/
     description: Map your codebase for you and your AI agent
     license: MIT
