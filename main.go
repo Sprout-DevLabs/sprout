@@ -33,6 +33,10 @@ Filtering:
   --ignore PATTERNS       hide matches (gitignore syntax): '*.log', 'src/gen/', 'docs/**/*.png'
   --only PATTERNS         show only matching files: '*.go', 'web/src/**/*.tsx'
 
+Config:
+  ~/.config/sprout/config and the nearest .sproutrc hold default flags, one per line.
+  --no-config             ignore them for this run
+
   --version               print version
 
 Examples:
@@ -52,33 +56,73 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+// flags is everything the command line (and config files) can set.
+type flags struct {
+	all, hidden, noIgnore, noConfig       bool
+	stats, json, git, churn, ai, showVers bool
+	depth, budget                         int
+	ignore, only                          patternList
+	since, diff                           string
+}
+
+func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("sprout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() {} // errors get a one-line hint below; --help gets usage on stdout
+	fs.Usage = func() {} // errors get a one-line hint; --help gets usage on stdout
 
-	var all bool
-	fs.BoolVar(&all, "all", false, "show everything: hidden files and ignored entries")
-	fs.BoolVar(&all, "a", false, "shorthand for --all")
-	hidden := fs.Bool("hidden", false, "show hidden files and directories")
-	noIgnore := fs.Bool("no-ignore", false, "don't apply .gitignore or the built-in ignore list")
-	var depth int
-	fs.IntVar(&depth, "depth", -1, "limit directory depth (-1 for unlimited)")
-	fs.IntVar(&depth, "L", -1, "shorthand for --depth")
-	var ignore, only patternList
-	fs.Var(&ignore, "ignore", "gitignore-style patterns to hide, comma-separated or repeated")
-	fs.Var(&only, "only", "show only files matching these patterns, e.g. '*.go' or 'src/**/*.ts'")
-	stats := fs.Bool("stats", false, "show project statistics instead of the tree")
-	asJSON := fs.Bool("json", false, "print the tree and statistics as JSON")
-	gitStatus := fs.Bool("git", false, "mark changed files with their git status")
-	churn := fs.Bool("churn", false, "show how many commits touched each path (hotspots)")
-	since := fs.String("since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
-	aiMap := fs.Bool("ai", false, "print a compact project map for LLM prompts and agents")
-	budget := fs.Int("budget", 2000, "with --ai: approximate token budget")
-	diffRev := fs.String("diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
-	showVersion := fs.Bool("version", false, "print version and exit")
+	fs.BoolVar(&f.all, "all", false, "show everything: hidden files and ignored entries")
+	fs.BoolVar(&f.all, "a", false, "shorthand for --all")
+	fs.BoolVar(&f.hidden, "hidden", false, "show hidden files and directories")
+	fs.BoolVar(&f.noIgnore, "no-ignore", false, "don't apply .gitignore, .sproutignore or the built-in ignore list")
+	fs.BoolVar(&f.noConfig, "no-config", false, "ignore config files")
+	fs.IntVar(&f.depth, "depth", -1, "limit directory depth (-1 for unlimited)")
+	fs.IntVar(&f.depth, "L", -1, "shorthand for --depth")
+	fs.Var(&f.ignore, "ignore", "gitignore-style patterns to hide, comma-separated or repeated")
+	fs.Var(&f.only, "only", "show only files matching these patterns, e.g. '*.go' or 'src/**/*.ts'")
+	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
+	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
+	fs.BoolVar(&f.git, "git", false, "mark changed files with their git status")
+	fs.BoolVar(&f.churn, "churn", false, "show how many commits touched each path (hotspots)")
+	fs.StringVar(&f.since, "since", "", "with --churn: only count commits since this date, e.g. '90 days ago'")
+	fs.BoolVar(&f.ai, "ai", false, "print a compact project map for LLM prompts and agents")
+	fs.IntVar(&f.budget, "budget", 2000, "with --ai: approximate token budget")
+	fs.StringVar(&f.diff, "diff", "", "show only paths changed in a git revision range, e.g. main...HEAD")
+	fs.BoolVar(&f.showVers, "version", false, "print version and exit")
+	return fs
+}
 
-	path, err := parseArgs(fs, args)
+// parseFlags reads the command line, then re-reads it on top of the config
+// files for the target directory, so the command line always wins.
+func parseFlags(args []string, stderr io.Writer) (*flags, string, error) {
+	f := &flags{}
+	path, err := parseArgs(newFlagSet(f, stderr), args)
+	if err != nil || f.noConfig || f.showVers {
+		return f, path, err
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		fmt.Fprintln(stderr, "sprout: config:", err)
+		return f, path, err
+	}
+	if len(cfg) == 0 {
+		return f, path, nil
+	}
+	f = &flags{}
+	fs := newFlagSet(f, stderr)
+	if err := fs.Parse(cfg); err != nil {
+		fmt.Fprintln(stderr, "sprout: in a config file (run with --no-config to skip them)")
+		return f, path, err
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "sprout: config files can only set flags, not %q\n", fs.Arg(0))
+		return f, path, fmt.Errorf("positional argument in config")
+	}
+	_, err = parseArgs(fs, args)
+	return f, path, err
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	f, path, err := parseFlags(args, stderr)
 	if err == flag.ErrHelp {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -88,7 +132,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	if *showVersion {
+	if f.showVers {
 		fmt.Fprintln(stdout, "sprout", resolveVersion())
 		return 0
 	}
@@ -105,28 +149,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	opts := Options{
 		// --ai wants .github/ and friends; ignore rules still drop the junk.
-		ShowHidden: *hidden || all || *aiMap,
-		MaxDepth:   depth,
-		Ignore:     ignore,
-		Only:       only,
-		NoIgnore:   *noIgnore || all,
+		ShowHidden: f.hidden || f.all || f.ai,
+		MaxDepth:   f.depth,
+		Ignore:     f.ignore,
+		Only:       f.only,
+		NoIgnore:   f.noIgnore || f.all,
 	}
 
-	tree, branch, err := load(path, opts, *gitStatus, *diffRev)
-	if err == nil && *churn {
-		err = addChurn(path, tree, *since)
+	tree, branch, err := load(path, opts, f.git, f.diff)
+	if err == nil && f.churn {
+		err = addChurn(path, tree, f.since)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
 	}
 
-	if *aiMap {
-		fmt.Fprint(stdout, AIMap(tree, path, *budget))
+	if f.ai {
+		fmt.Fprint(stdout, AIMap(tree, path, f.budget))
 		return 0
 	}
 
-	if *asJSON {
+	if f.json {
 		if err := WriteJSON(stdout, tree, path); err != nil {
 			fmt.Fprintln(stderr, "sprout:", err)
 			return 1
@@ -134,13 +178,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	if *stats {
+	if f.stats {
 		PrintStats(stdout, tree, path)
 		return 0
 	}
 
 	p := printer{w: stdout, color: useColor(stdout)}
-	if *churn {
+	if f.churn {
 		p.churnFiles, p.churnDirs = churnMax(tree.Root)
 	}
 	header := paint(p.color, blue+";"+bold, path)
@@ -149,7 +193,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, header)
 	p.tree(tree.Root, "")
-	if *diffRev != "" {
+	if f.diff != "" {
 		fmt.Fprintf(stdout, "\n%s changed, +%d -%d\n", plural(tree.Root.Changes, "file"), tree.Root.Added, tree.Root.Deleted)
 	} else {
 		printSummary(stdout, tree)
