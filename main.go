@@ -254,7 +254,7 @@ func run(args []string, out, stderr io.Writer) int {
 	}
 
 	if f.entry {
-		steps := readingOrder(path, tree, buildGraph(path, tree), 15)
+		steps := readingOrder(path, tree, buildGraph(path, tree, false), 15)
 		printReadingOrder(stdout, tree.Root.Name, steps)
 		return 0
 	}

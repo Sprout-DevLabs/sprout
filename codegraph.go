@@ -17,11 +17,10 @@ import (
 	"sync"
 )
 
-// The code graph gives --ai and --entry what a tree can't: the top-level
-// declarations in each source file and which files import which, so the
-// most depended-on code can be ranked first (the idea behind aider's repo
-// map). Go is parsed with the standard library; other languages use
-// line-oriented patterns, which cover the common declaration and import
+// The analyzers here read source files and turn them into the Graph in
+// graph.go: which files exist, their top-level declarations, and which files
+// depend on which. Go is parsed with the standard library; other languages
+// use line-oriented patterns, which cover the common declaration and import
 // forms without a parser dependency.
 //
 // ponytail: regex extraction misses unusual formatting and path aliases
@@ -32,69 +31,80 @@ const (
 	maxSourceSize = 512 << 10
 )
 
-type sourceFile struct {
-	rel        string
-	symbols    []string
-	imports    map[string]bool // resolved repo-relative paths
-	importedBy int
-}
-
-type codeGraph struct {
-	files map[string]*sourceFile
-}
-
-// ranked returns files that at least one other file imports, most
-// imported first, skipping tests, examples and vendored code.
-func (g *codeGraph) ranked() []*sourceFile {
-	var out []*sourceFile
-	for _, f := range g.files {
-		if f.importedBy > 0 && !isTestPath(f.rel) && !isTestFile(f.rel) {
-			out = append(out, f)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].importedBy != out[j].importedBy {
-			return out[i].importedBy > out[j].importedBy
-		}
-		return out[i].rel < out[j].rel
-	})
-	return out
-}
-
 func isTestFile(rel string) bool {
 	base := path.Base(rel)
 	return strings.HasSuffix(base, "_test.go") || strings.Contains(base, ".test.") ||
 		strings.Contains(base, ".spec.") || strings.HasPrefix(base, "test_")
 }
 
-func buildGraph(root string, t *Tree) *codeGraph {
-	g := &codeGraph{files: map[string]*sourceFile{}}
-	var paths []*Node
+// Test code lives in test files or test directories. Fixtures, examples and
+// vendored code aren't the project's own code, so they stay out of the graph.
+var (
+	testDirs  = map[string]bool{"test": true, "tests": true, "__tests__": true}
+	graphSkip = map[string]bool{"testdata": true, "examples": true, "example": true, "fixtures": true, "vendor": true, "third_party": true}
+)
+
+// inDir reports whether any directory in rel's path is in dirs. It runs for
+// every file in the tree, so it doesn't allocate.
+func inDir(rel string, dirs map[string]bool) bool {
+	dir := path.Dir(rel)
+	for dir != "." && dir != "" {
+		part := dir
+		if i := strings.IndexByte(dir, '/'); i >= 0 {
+			part, dir = dir[:i], dir[i+1:]
+		} else {
+			dir = ""
+		}
+		if dirs[part] {
+			return true
+		}
+	}
+	return false
+}
+
+func isTestRel(rel string) bool { return isTestFile(rel) || inDir(rel, testDirs) }
+
+// fileFacts is what one analyzer pass learns about one file.
+type fileFacts struct {
+	symbols []string
+	targets []string // resolved dependencies (non-Go)
+	goFacts *goFacts // Go files; resolved once every file is parsed
+}
+
+// buildGraph analyzes the source files in t. With tests, test files join
+// the graph too, so each file's tests can be found; --entry and --ai don't
+// need them and skip reading them, which on Go-heavy repos is a third of
+// the parsing.
+func buildGraph(root string, t *Tree, tests bool) *Graph {
+	var nodes []*Node
+	var goMods []*Node
 	walk(t.Root, func(n *Node) {
-		// Tests, vendored code and fixtures never vote or rank, so don't
-		// read them at all (in kubernetes that's most of the Go files).
-		if !n.IsDir && !n.Missing && langOf(n.Name) != "" && len(paths) < maxGraphFiles &&
-			!isTestPath(n.Rel) && !isTestFile(n.Rel) {
-			paths = append(paths, n)
+		if n.IsDir || n.Missing {
+			return
+		}
+		isMod, lang := n.Name == "go.mod", langOf(n.Name) // cheap checks first: this visits every file
+		if (!isMod && lang == "") || inDir(n.Rel, graphSkip) {
+			return
+		}
+		if isMod {
+			goMods = append(goMods, n)
+		} else if len(nodes) < maxGraphFiles && (tests || !isTestRel(n.Rel)) {
+			nodes = append(nodes, n)
 		}
 	})
 	// Parsing allocates heavily and briefly; trade some memory for less GC.
 	defer debug.SetGCPercent(debug.SetGCPercent(400))
 
+	b := newGraphBuilder(len(nodes))
 	exists := map[string]bool{}
-	byDir := map[string][]string{}
-	for _, n := range paths {
+	for _, n := range nodes {
+		b.add(GraphFile{Rel: n.Rel, Test: isTestRel(n.Rel)})
 		exists[n.Rel] = true
-		byDir[path.Dir(n.Rel)] = append(byDir[path.Dir(n.Rel)], n.Rel)
 	}
-	r := resolver{exists: exists, byDir: byDir, goModule: goModulePath(root), javaIndex: javaIndex(paths)}
+	r := resolver{exists: exists, goModules: goModules(t, goMods), javaIndex: javaIndex(nodes)}
 
 	// Parse in parallel: reading and parsing dominate on large repos.
-	type result struct {
-		f    *sourceFile
-		info *goInfo
-	}
-	results := make([]result, len(paths))
+	facts := make([]fileFacts, len(nodes))
 	next := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < runtime.NumCPU(); w++ {
@@ -102,66 +112,55 @@ func buildGraph(root string, t *Tree) *codeGraph {
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				results[i].f, results[i].info = parseSource(paths[i], t.FSPath(paths[i]), r)
+				facts[i] = parseSource(nodes[i], t.FSPath(nodes[i]), !b.files[i].Test, r)
 			}
 		}()
 	}
-	for i := range paths {
+	for i := range nodes {
 		next <- i
 	}
 	close(next)
 	wg.Wait()
 
-	goFiles := map[string]goInfo{}
-	for _, res := range results {
-		if res.f == nil {
-			continue
-		}
-		g.files[res.f.rel] = res.f
-		if res.info != nil {
-			goFiles[res.f.rel] = *res.info
+	for i, f := range facts {
+		b.files[i].Symbols = f.symbols
+		for _, target := range f.targets {
+			b.link(FileID(i), b.byRel[target])
 		}
 	}
-	linkGoPackages(g, goFiles)
-	for _, f := range g.files { // tests were never read, so only real code votes
-		for target := range f.imports {
-			if tf := g.files[target]; tf != nil {
-				tf.importedBy++
-			}
-		}
-	}
-	return g
+	linkGo(b, facts, r)
+	return b.build()
 }
 
-// parseSource reads one file and resolves its imports. The resolver is
-// read-only, so this is safe to run concurrently.
-func parseSource(n *Node, path string, r resolver) (*sourceFile, *goInfo) {
+// parseSource reads one file and resolves what it can on its own. The
+// resolver is read-only, so this is safe to run concurrently.
+func parseSource(n *Node, fsPath string, wantSymbols bool, r resolver) fileFacts {
+	var f fileFacts
 	if n.Size > maxSourceSize {
-		return nil, nil
+		return f
 	}
-	src, err := os.ReadFile(path)
+	src, err := os.ReadFile(fsPath)
 	if err != nil || bytes.IndexByte(src, 0) >= 0 {
-		return nil, nil
+		return f
 	}
-	f := &sourceFile{rel: n.Rel, imports: map[string]bool{}}
-	var specs []string
-	var info *goInfo
 	lang := langOf(n.Name)
 	if lang == "go" {
-		var gi goInfo
-		f.symbols, specs, gi = goDecls(path, src)
-		info = &gi
-	} else {
-		f.symbols, specs = scanDecls(lang, src)
+		f.symbols, f.goFacts = goDecls(fsPath, src, wantSymbols)
+		return f
+	}
+	var specs []string
+	f.symbols, specs = scanDecls(lang, src)
+	if !wantSymbols {
+		f.symbols = nil
 	}
 	for _, spec := range specs {
 		for _, target := range r.resolve(lang, n.Rel, spec) {
 			if target != n.Rel {
-				f.imports[target] = true
+				f.targets = append(f.targets, target)
 			}
 		}
 	}
-	return f, info
+	return f
 }
 
 func langOf(name string) string {
@@ -184,27 +183,52 @@ func langOf(name string) string {
 
 // ---------- Go ----------
 
-// goInfo is what a Go file declares at top level and which identifiers it
-// uses. Files in one package use each other without imports, so these
-// references are how a single-package program gets ranked.
-type goInfo struct {
-	pkg      string
-	declares []string
-	uses     map[string]bool
+// goFacts is what a Go file declares and references. Edges come from it
+// once every file is parsed, because they depend on what other files declare.
+type goFacts struct {
+	pkg       string
+	declares  []string        // top-level names
+	uses      map[string]bool // every identifier: same-package references
+	imports   []goImport
+	selectors map[[2]string]bool // {"pkg", "Name"} for every pkg.Name selector on a bare identifier
 }
 
-// goDecls returns exported top-level declarations with their signatures,
-// the file's import paths, and its declarations and identifier uses.
-func goDecls(filename string, src []byte) (symbols, imports []string, info goInfo) {
+type goImport struct{ path, name string } // name is "" unless the import is renamed
+
+// goDecls parses a Go file for its declarations (with signatures when
+// wantSymbols) and its references.
+func goDecls(filename string, src []byte, wantSymbols bool) ([]string, *goFacts) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filename, src, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil, info
+		return nil, nil
 	}
-	info = goInfo{pkg: file.Name.Name, uses: map[string]bool{}}
+	gf := &goFacts{pkg: file.Name.Name, uses: map[string]bool{}, selectors: map[[2]string]bool{}}
+	// Only selectors that could be on an imported package are kept: every
+	// file's selectors are held until linking, so this bounds memory. If a
+	// package's name isn't guessable from its path, its import falls back to
+	// depending on the whole package, so nothing is lost.
+	pkgNames := map[string]bool{}
+	for _, imp := range file.Imports {
+		gi := goImport{path: strings.Trim(imp.Path.Value, `"`)}
+		if imp.Name != nil {
+			gi.name = imp.Name.Name
+			pkgNames[gi.name] = true
+		} else {
+			for _, n := range guessPkgNames(gi.path) {
+				pkgNames[n] = true
+			}
+		}
+		gf.imports = append(gf.imports, gi)
+	}
 	ast.Inspect(file, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok {
-			info.uses[id.Name] = true
+		switch x := n.(type) {
+		case *ast.Ident:
+			gf.uses[x.Name] = true
+		case *ast.SelectorExpr:
+			if id, ok := x.X.(*ast.Ident); ok && pkgNames[id.Name] {
+				gf.selectors[[2]string{id.Name, x.Sel.Name}] = true
+			}
 		}
 		return true
 	})
@@ -212,29 +236,29 @@ func goDecls(filename string, src []byte) (symbols, imports []string, info goInf
 		switch d := d.(type) {
 		case *ast.FuncDecl:
 			if d.Recv == nil && d.Name.Name != "main" && d.Name.Name != "init" {
-				info.declares = append(info.declares, d.Name.Name)
+				gf.declares = append(gf.declares, d.Name.Name)
 			}
 		case *ast.GenDecl:
 			for _, s := range d.Specs {
 				switch s := s.(type) {
 				case *ast.TypeSpec:
-					info.declares = append(info.declares, s.Name.Name)
+					gf.declares = append(gf.declares, s.Name.Name)
 				case *ast.ValueSpec:
 					for _, n := range s.Names {
 						if n.Name != "_" {
-							info.declares = append(info.declares, n.Name)
+							gf.declares = append(gf.declares, n.Name)
 						}
 					}
 				}
 			}
 		}
 	}
-	for _, imp := range file.Imports {
-		imports = append(imports, strings.Trim(imp.Path.Value, `"`))
+	if !wantSymbols {
+		return nil, gf
 	}
 	// Exported API first; a program's unexported functions come after,
 	// since in package main nothing is exported.
-	var private []string
+	var symbols, private []string
 	for _, d := range file.Decls {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
@@ -259,30 +283,139 @@ func goDecls(filename string, src []byte) (symbols, imports []string, info goInf
 			}
 		}
 	}
-	symbols = append(symbols, private...)
-	return symbols, imports, info
+	return append(symbols, private...), gf
 }
 
-// linkGoPackages adds an edge from each Go file to the files in the same
-// directory and package whose top-level names it uses.
-func linkGoPackages(g *codeGraph, files map[string]goInfo) {
-	owner := map[string]string{} // "dir|pkg|name" -> declaring file
-	for rel, info := range files {
-		for _, name := range info.declares {
-			owner[path.Dir(rel)+"|"+info.pkg+"|"+name] = rel
-		}
-	}
-	for rel, info := range files {
-		f := g.files[rel]
-		if f == nil || isTestFile(rel) {
+// linkGo adds the Go edges, file to file:
+//
+//   - same package: a file depends on the files in its directory and
+//     package that declare the names it uses (tests may also use test files);
+//   - imports: a file depends on the files in the imported package that
+//     declare the names it selects (pkg.Name). Blank and dot imports, and
+//     imports whose selectors match nothing we parsed, depend on the whole
+//     package, so no dependency is lost.
+func linkGo(b *graphBuilder, facts []fileFacts, r resolver) {
+	// Declarations per package, keyed by directory and package name, so
+	// each identifier costs one short-string lookup: this loop visits every
+	// identifier in every file.
+	type decls map[string]FileID
+	owner := map[string]decls{}     // declared in non-test files
+	testOwner := map[string]decls{} // declared in test files
+	pkgOf := map[string]string{}    // dir -> package name of its non-test files
+	pkgFiles := map[string][]FileID{}
+	pkgKey := func(dir, pkg string) string { return dir + "\x00" + pkg }
+	for i, f := range facts {
+		gf := f.goFacts
+		if gf == nil {
 			continue
 		}
-		for name := range info.uses {
-			if target, ok := owner[path.Dir(rel)+"|"+info.pkg+"|"+name]; ok && target != rel {
-				f.imports[target] = true
+		id, dir := FileID(i), path.Dir(b.files[i].Rel)
+		table := owner
+		if b.files[i].Test {
+			table = testOwner
+		} else {
+			if _, ok := pkgOf[dir]; !ok {
+				pkgOf[dir] = gf.pkg
+			}
+			if pkgOf[dir] == gf.pkg {
+				pkgFiles[dir] = append(pkgFiles[dir], id)
+			}
+		}
+		k := pkgKey(dir, gf.pkg)
+		d := table[k]
+		if d == nil {
+			d = decls{}
+			table[k] = d
+		}
+		for _, name := range gf.declares {
+			if _, taken := d[name]; !taken {
+				d[name] = id
 			}
 		}
 	}
+
+	dirOf := map[string]string{} // import path -> package dir ("" if not in the tree)
+	for i, f := range facts {
+		gf := f.goFacts
+		if gf == nil {
+			continue
+		}
+		id, dir, test := FileID(i), path.Dir(b.files[i].Rel), b.files[i].Test
+
+		k := pkgKey(dir, gf.pkg)
+		same, sameTests := owner[k], testOwner[k]
+		for name := range gf.uses {
+			if t, ok := same[name]; ok {
+				b.link(id, t)
+			} else if test {
+				if t, ok := sameTests[name]; ok {
+					b.link(id, t)
+				}
+			}
+		}
+
+		local := map[string]string{} // name the file refers to a package by -> its dir
+		for _, imp := range gf.imports {
+			dir, seen := dirOf[imp.path]
+			if !seen {
+				dir, _ = r.goPackageDir(imp.path)
+				dirOf[imp.path] = dir
+			}
+			if dir == "" || len(pkgFiles[dir]) == 0 {
+				continue
+			}
+			name := imp.name
+			if name == "" {
+				name = pkgOf[dir]
+			}
+			if name == "_" || name == "." {
+				for _, t := range pkgFiles[dir] {
+					b.link(id, t)
+				}
+				continue
+			}
+			local[name] = dir
+		}
+		if len(local) == 0 {
+			continue
+		}
+		resolved := map[string]bool{}
+		for sel := range gf.selectors {
+			dir, ok := local[sel[0]]
+			if !ok {
+				continue
+			}
+			if t, ok := owner[pkgKey(dir, pkgOf[dir])][sel[1]]; ok {
+				b.link(id, t)
+				resolved[dir] = true
+			}
+		}
+		for _, dir := range local {
+			if !resolved[dir] {
+				for _, t := range pkgFiles[dir] {
+					b.link(id, t)
+				}
+			}
+		}
+	}
+}
+
+// guessPkgNames are the likely package names for an import path: its last
+// element without a gopkg.in-style ".vN" suffix or a "go-" prefix, and for
+// a major-version path like example.com/bar/v2, also "bar".
+func guessPkgNames(importPath string) []string {
+	clean := func(name string) string {
+		if i := strings.IndexByte(name, '.'); i > 0 {
+			name = name[:i]
+		}
+		return strings.TrimPrefix(name, "go-")
+	}
+	base := path.Base(importPath)
+	names := []string{clean(base)}
+	if len(base) > 1 && base[0] == 'v' && strings.Trim(base[1:], "0123456789") == "" {
+		names = append(names, clean(path.Base(path.Dir(importPath))))
+	}
+	return names
 }
 
 func goTypeKind(e ast.Expr) string {
@@ -299,17 +432,28 @@ func goTypeKind(e ast.Expr) string {
 	return ""
 }
 
-func goModulePath(root string) string {
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if m, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
-			return strings.Trim(strings.TrimSpace(m), `"`)
+// goModule is one go.mod in the tree: its module path and directory.
+type goModule struct{ path, dir string }
+
+// goModules reads every go.mod in the tree, longest module path first, so
+// imports resolve in multi-module repositories (kubernetes' staging/, for
+// one), not just against the root module.
+func goModules(t *Tree, mods []*Node) []goModule {
+	var out []goModule
+	for _, n := range mods {
+		data, err := os.ReadFile(t.FSPath(n))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if m, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+				out = append(out, goModule{strings.Trim(strings.TrimSpace(m), `"`), path.Dir(n.Rel)})
+				break
+			}
 		}
 	}
-	return ""
+	sort.Slice(out, func(i, j int) bool { return len(out[i].path) > len(out[j].path) })
+	return out
 }
 
 // ---------- other languages ----------
@@ -435,29 +579,28 @@ func oneLine(s string) string {
 
 type resolver struct {
 	exists    map[string]bool
-	byDir     map[string][]string
-	goModule  string
+	goModules []goModule
 	javaIndex map[string]string // "com/acme/Foo" -> rel path
+}
+
+// goPackageDir maps a Go import path to the directory it lives in, if a
+// module in the tree provides it.
+func (r resolver) goPackageDir(importPath string) (string, bool) {
+	for _, m := range r.goModules {
+		if importPath == m.path || strings.HasPrefix(importPath, m.path+"/") {
+			dir := path.Join(m.dir, strings.TrimPrefix(importPath, m.path))
+			if dir == "" {
+				dir = "."
+			}
+			return dir, true
+		}
+	}
+	return "", false
 }
 
 func (r resolver) resolve(lang, from, spec string) []string {
 	dir := path.Dir(from)
 	switch lang {
-	case "go":
-		if r.goModule == "" || (spec != r.goModule && !strings.HasPrefix(spec, r.goModule+"/")) {
-			return nil
-		}
-		pkg := strings.TrimPrefix(strings.TrimPrefix(spec, r.goModule), "/")
-		if pkg == "" {
-			pkg = "."
-		}
-		var files []string
-		for _, f := range r.byDir[pkg] {
-			if strings.HasSuffix(f, ".go") && !strings.HasSuffix(f, "_test.go") {
-				files = append(files, f)
-			}
-		}
-		return files
 	case "js":
 		if !strings.HasPrefix(spec, ".") {
 			return nil // a package, not a local file

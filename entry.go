@@ -15,7 +15,7 @@ type readingStep struct {
 // readingOrder suggests where to start in an unfamiliar codebase: what the
 // project is, where execution starts, then the code everything else
 // depends on, most used first.
-func readingOrder(root string, t *Tree, g *codeGraph, limit int) []readingStep {
+func readingOrder(root string, t *Tree, g *Graph, limit int) []readingStep {
 	var steps []readingStep
 	seen := map[string]bool{}
 	add := func(rel, why string) {
@@ -36,8 +36,8 @@ func readingOrder(root string, t *Tree, g *codeGraph, limit int) []readingStep {
 			add(e, "entry point")
 		}
 	}
-	for _, f := range g.ranked() {
-		add(f.rel, "used by "+plural(f.importedBy, "file"))
+	for _, id := range g.Ranked() {
+		add(g.Files[id].Rel, "used by "+plural(g.UsedBy(id), "file"))
 	}
 	return steps
 }
@@ -59,19 +59,20 @@ func printReadingOrder(w io.Writer, name string, steps []readingStep) {
 
 // writeKeyFiles lists the most imported files with their declarations,
 // spending at most budget tokens.
-func writeKeyFiles(b *strings.Builder, ranked []*sourceFile, budget int) {
+func writeKeyFiles(b *strings.Builder, g *Graph, ranked []FileID, budget int) {
 	const maxSymbols = 8
 	head := "\n## key files (most used first)\n"
 	used := estimateTokens(head)
 	var lines []string
-	for _, f := range ranked {
-		syms := f.symbols
+	for _, id := range ranked {
+		f := g.Files[id]
+		syms := f.Symbols
 		more := ""
 		if len(syms) > maxSymbols {
 			more = fmt.Sprintf("; +%d more", len(syms)-maxSymbols)
 			syms = syms[:maxSymbols]
 		}
-		line := fmt.Sprintf("%s (used by %d)", f.rel, f.importedBy)
+		line := fmt.Sprintf("%s (used by %d)", f.Rel, g.UsedBy(id))
 		if len(syms) > 0 {
 			line += ": " + strings.Join(syms, "; ") + more
 		}

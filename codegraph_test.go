@@ -5,7 +5,9 @@ import (
 	"testing"
 )
 
-func graphFor(t *testing.T, files map[string]string) *codeGraph {
+// graphFor builds a graph of files, tests included: they're in the graph
+// but never count toward "used by", so expectations match --entry and --ai.
+func graphFor(t *testing.T, files map[string]string) *Graph {
 	t.Helper()
 	dir := t.TempDir()
 	for rel, src := range files {
@@ -15,14 +17,21 @@ func graphFor(t *testing.T, files map[string]string) *codeGraph {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return buildGraph(dir, tree)
+	return buildGraph(dir, tree, true)
 }
 
-func usedBy(g *codeGraph, rel string) int {
-	if f := g.files[rel]; f != nil {
-		return f.importedBy
+func usedBy(g *Graph, rel string) int {
+	if id, ok := g.ID(rel); ok {
+		return g.UsedBy(id)
 	}
 	return -1
+}
+
+func symbolsOf(g *Graph, rel string) []string {
+	if id, ok := g.ID(rel); ok {
+		return g.Files[id].Symbols
+	}
+	return nil
 }
 
 func TestGoGraph(t *testing.T) {
@@ -36,7 +45,7 @@ func TestGoGraph(t *testing.T) {
 	if usedBy(g, "store/store.go") != 1 || usedBy(g, "util.go") != 1 {
 		t.Errorf("store.go used by %d, util.go used by %d; want 1 and 1", usedBy(g, "store/store.go"), usedBy(g, "util.go"))
 	}
-	syms := strings.Join(g.files["store/store.go"].symbols, "; ")
+	syms := strings.Join(symbolsOf(g, "store/store.go"), "; ")
 	for _, want := range []string{"func Open() (*DB, error)", "type DB struct", "func (d *DB) Get(id string) ([]byte, error)", "func private()"} {
 		if !strings.Contains(syms, want) {
 			t.Errorf("missing %q in %q", want, syms)
@@ -61,7 +70,7 @@ func TestJSGraph(t *testing.T) {
 	if n := usedBy(g, "src/lib/http.ts"); n != 2 {
 		t.Errorf("http.ts used by %d, want 2 (.js specifier resolves to .ts)", n)
 	}
-	syms := strings.Join(g.files["src/lib/http.ts"].symbols, "; ")
+	syms := strings.Join(symbolsOf(g, "src/lib/http.ts"), "; ")
 	if !strings.Contains(syms, "export async function get(url: string, opts?: Options): Promise<Response>") {
 		t.Errorf("signature: %q", syms)
 	}
@@ -79,7 +88,7 @@ func TestPythonGraph(t *testing.T) {
 			t.Errorf("%s used by %d, want %d", rel, n, want)
 		}
 	}
-	syms := strings.Join(g.files["src/pkg/core.py"].symbols, "; ")
+	syms := strings.Join(symbolsOf(g, "src/pkg/core.py"), "; ")
 	if !strings.Contains(syms, "def run(argv: list[str]) -> int") || !strings.Contains(syms, "def long_one(…)") ||
 		!strings.Contains(syms, "class Runner(Base)") || strings.Contains(syms, "_private") || strings.Contains(syms, "method") {
 		t.Errorf("python symbols: %q", syms)
@@ -101,7 +110,7 @@ func TestRustAndJavaGraph(t *testing.T) {
 			t.Errorf("%s used by %d, want %d", rel, n, want)
 		}
 	}
-	syms := strings.Join(g.files["src/config.rs"].symbols, "; ")
+	syms := strings.Join(symbolsOf(g, "src/config.rs"), "; ")
 	if !strings.Contains(syms, "pub fn load(path: &str) -> Config") || strings.Contains(syms, "hidden") {
 		t.Errorf("rust symbols: %q", syms)
 	}
