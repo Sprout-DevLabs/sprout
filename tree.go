@@ -36,6 +36,7 @@ type Node struct {
 	Added     int    // --diff: lines added (directories: total below)
 	Deleted   int    // --diff: lines deleted (directories: total below)
 	Churn     int    // --churn: commits that touched this path
+	More      int    // --max-files: files not listed in this directory
 }
 
 // Tree is a walked directory plus what the walk left out.
@@ -195,8 +196,10 @@ func (w *walker) populate(node *Node, depth int) error {
 	return nil
 }
 
-// Count returns the number of directories and files below node.
+// Count returns the number of directories and files below node, including
+// files elided by --max-files.
 func (n *Node) Count() (dirs, files int) {
+	files = n.More
 	for _, c := range n.Children {
 		if c.IsDir {
 			d, f := c.Count()
@@ -219,10 +222,14 @@ type printer struct {
 }
 
 func (p printer) tree(node *Node, prefix string) {
+	last := len(node.Children) - 1
+	if node.More > 0 {
+		last++ // the "… N more files" line closes the directory
+	}
 	for i, child := range node.Children {
 		connector := "├── "
 		nextPrefix := prefix + "│   "
-		if i == len(node.Children)-1 {
+		if i == last {
 			connector = "└── "
 			nextPrefix = prefix + "    "
 		}
@@ -230,6 +237,9 @@ func (p printer) tree(node *Node, prefix string) {
 		if child.IsDir {
 			p.tree(child, nextPrefix)
 		}
+	}
+	if node.More > 0 {
+		fmt.Fprintln(p.w, paint(p.color, dim, prefix+"└── … "+plural(node.More, "more file")))
 	}
 }
 

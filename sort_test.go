@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,5 +127,26 @@ func TestParseAge(t *testing.T) {
 		if _, err := parseAge(in); err == nil {
 			t.Errorf("parseAge(%q) should fail", in)
 		}
+	}
+}
+
+func TestMaxFiles(t *testing.T) {
+	dir := t.TempDir()
+	for i, size := range []int{50, 400, 10, 300, 20} {
+		write(t, dir, fmt.Sprintf("icons/i%d.svg", i), strings.Repeat("x", size))
+	}
+	write(t, dir, "icons/sub/keep.txt", "x")
+
+	out, _, code := runCLI(t, dir, "--max-files", "2", "--sort", "size")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"i1.svg", "i3.svg", "sub/", "└── … 3 more files", "6 files"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "i2.svg") {
+		t.Errorf("smallest files should be elided:\n%s", out)
 	}
 }
