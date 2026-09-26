@@ -77,3 +77,21 @@ func parseAge(s string) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// capFiles keeps the first max files in each directory (in the current
+// sort order) and records how many were left out. Directories always stay.
+func capFiles(root *Node, max int) {
+	walk(root, func(d *Node) {
+		kept, files := d.Children[:0], 0
+		for _, c := range d.Children {
+			if !c.IsDir {
+				if files++; files > max {
+					d.More++
+					continue
+				}
+			}
+			kept = append(kept, c)
+		}
+		d.Children = kept
+	})
+}

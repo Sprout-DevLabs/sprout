@@ -39,6 +39,7 @@ Filtering:
   --ignore PATTERNS       hide matches (gitignore syntax): '*.log', 'src/gen/', 'docs/**/*.png'
   --only PATTERNS         show only matching files: '*.go', 'web/src/**/*.tsx'
   --changed-within AGE    only files modified recently: 30m, 12h, 7d, 2w
+  --max-files N           list at most N files per folder, then "… 37 more files"
 
 Config:
   ~/.config/sprout/config and the nearest .sproutrc hold default flags, one per line.
@@ -68,7 +69,7 @@ type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
 	size, si, reverse, dirsFirst          bool
-	depth, budget                         int
+	depth, budget, maxFiles               int
 	ignore, only                          patternList
 	since, diff, sortBy, within           string
 }
@@ -93,6 +94,7 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.BoolVar(&f.reverse, "reverse", false, "reverse the sort order")
 	fs.BoolVar(&f.reverse, "r", false, "shorthand for --reverse")
 	fs.StringVar(&f.within, "changed-within", "", "only files modified within this long, e.g. 30m, 12h, 7d, 2w")
+	fs.IntVar(&f.maxFiles, "max-files", 0, "list at most N files per directory (0 for all)")
 	fs.BoolVar(&f.dirsFirst, "dirs-first", false, "list directories before files")
 	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
 	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
@@ -199,6 +201,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if f.diff == "" && (f.sortBy != "name" || f.reverse || f.dirsFirst) {
 		sortTree(tree.Root, f.sortBy, f.reverse, f.dirsFirst)
+	}
+
+	if f.maxFiles > 0 && !f.ai {
+		capFiles(tree.Root, f.maxFiles)
 	}
 
 	if f.ai {
