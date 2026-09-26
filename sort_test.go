@@ -88,3 +88,43 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestChangedWithin(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "fresh/new.go", "x")
+	write(t, dir, "stale/old.go", "x")
+	write(t, dir, "mixed/new.go", "x")
+	write(t, dir, "mixed/old.go", "x")
+	old := time.Now().Add(-10 * 24 * time.Hour)
+	for _, f := range []string{"stale/old.go", "mixed/old.go"} {
+		os.Chtimes(filepath.Join(dir, f), old, old)
+	}
+
+	out, _, code := runCLI(t, dir, "--changed-within", "7d")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(out, "old.go") || strings.Contains(out, "stale") {
+		t.Errorf("old files and emptied folders should be gone:\n%s", out)
+	}
+	if strings.Count(out, "new.go") != 2 {
+		t.Errorf("recent files missing:\n%s", out)
+	}
+	if out, _, _ := runCLI(t, dir, "--changed-within", "2w"); !strings.Contains(out, "old.go") {
+		t.Errorf("2w should include 10-day-old files:\n%s", out)
+	}
+}
+
+func TestParseAge(t *testing.T) {
+	good := map[string]time.Duration{"30m": 30 * time.Minute, "12h": 12 * time.Hour, "7d": 7 * 24 * time.Hour, "2w": 14 * 24 * time.Hour, "1.5d": 36 * time.Hour}
+	for in, want := range good {
+		if got, err := parseAge(in); err != nil || got != want {
+			t.Errorf("parseAge(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "7", "soon", "-3d", "d"} {
+		if _, err := parseAge(in); err == nil {
+			t.Errorf("parseAge(%q) should fail", in)
+		}
+	}
+}

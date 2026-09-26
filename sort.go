@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // sortTree orders every directory's children. by is "name" (the walk's
@@ -55,4 +57,23 @@ func humanSize(n int64, si bool) string {
 	}
 	s := fmt.Sprintf("%.1f", float64(n)/float64(div))
 	return strings.TrimSuffix(s, ".0") + string("KMGTPE"[exp])
+}
+
+// parseAge reads --changed-within values: Go durations (90m, 36h) plus
+// d for days and w for weeks (7d, 2w).
+func parseAge(s string) (time.Duration, error) {
+	for suffix, unit := range map[string]time.Duration{"d": 24 * time.Hour, "w": 7 * 24 * time.Hour} {
+		if n, ok := strings.CutSuffix(s, suffix); ok {
+			v, err := strconv.ParseFloat(n, 64)
+			if err != nil || v < 0 {
+				break
+			}
+			return time.Duration(v * float64(unit)), nil
+		}
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("--changed-within wants a duration like 30m, 12h, 7d or 2w, not %q", s)
+	}
+	return d, nil
 }
