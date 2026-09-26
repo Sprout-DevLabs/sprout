@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"time"
 )
@@ -13,6 +14,7 @@ const usage = `sprout: map your codebase, for you and your AI agent
 
 Usage:
   sprout [path] [flags]
+  sprout github.com/owner/repo [flags]   map a remote repository (any git URL works)
   sprout mcp [root]       serve project_map, tree and diff_tree to coding agents (MCP, stdio)
 
 Views:
@@ -122,7 +124,11 @@ func parseFlags(args []string, stderr io.Writer) (*flags, string, error) {
 	if err != nil || f.noConfig || f.showVers {
 		return f, path, err
 	}
-	cfg, err := loadConfig(path)
+	dir := path
+	if _, remote := remoteURL(path); remote {
+		dir = "" // a cloned repo's own .sproutrc is untrusted; only the user's config applies
+	}
+	cfg, err := loadConfig(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout: config:", err)
 		return f, path, err
@@ -173,6 +179,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		since = time.Now().Add(-age)
+	}
+
+	shown := path
+	if url, ok := remoteURL(path); ok {
+		dir, cleanup, err := cloneRemote(url, f.git || f.churn || f.diff != "", stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "sprout:", err)
+			return 1
+		}
+		defer cleanup()
+		path, shown = dir, filepath.Base(dir)
 	}
 
 	info, err := os.Stat(path)
@@ -245,7 +262,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if f.churn {
 		p.churnFiles, p.churnDirs = churnMax(tree.Root)
 	}
-	header := paint(p.color, blue+";"+bold, path)
+	header := paint(p.color, blue+";"+bold, shown)
 	if branch != "" {
 		header += paint(p.color, dim, " "+branch)
 	}

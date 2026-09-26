@@ -61,7 +61,11 @@ func projectConfigPath(dir string) string {
 // loadConfig returns the flags from the user and project config files.
 func loadConfig(dir string) ([]string, error) {
 	var args []string
-	for _, p := range []string{userConfigPath(), projectConfigPath(dir)} {
+	project := ""
+	if dir != "" {
+		project = projectConfigPath(dir)
+	}
+	for _, p := range []string{userConfigPath(), project} {
 		if p == "" {
 			continue
 		}
