@@ -18,6 +18,10 @@ func estimateTokens(s string) int { return (len(s) + 3) / 4 }
 // an LLM prompt or agent context: what it is, where things live, which files
 // matter, and what's changing — fitted to about budget tokens.
 func AIMap(t *Tree, root string, budget int) string {
+	// Parse sources while git works out status and history.
+	graph := make(chan *codeGraph, 1)
+	go func() { graph <- buildGraph(root, t) }()
+
 	var b strings.Builder
 	s := &Stats{Languages: map[string]int{}}
 	collectStats(t.Root, s)
@@ -54,7 +58,7 @@ func AIMap(t *Tree, root string, budget int) string {
 
 	// The structure gets three fifths of what's left and the key files the
 	// rest, plus whatever the structure didn't need.
-	ranked := buildGraph(root, t).ranked()
+	ranked := (<-graph).ranked()
 	b.WriteString("\n## structure\n")
 	remaining := budget - estimateTokens(b.String())
 	share := remaining

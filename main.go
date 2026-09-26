@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -150,7 +151,12 @@ func parseFlags(args []string, stderr io.Writer) (*flags, string, error) {
 	return f, path, err
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, out, stderr io.Writer) int {
+	// One write per line made printing a 30k-file tree take seconds.
+	buf := bufio.NewWriterSize(out, 64<<10)
+	defer buf.Flush()
+	var stdout io.Writer = buf
+
 	f, path, err := parseFlags(args, stderr)
 	if err == flag.ErrHelp {
 		fmt.Fprint(stdout, usage)
@@ -211,6 +217,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		NoIgnore:   f.noIgnore || f.all,
 		Sizes:      f.size || f.sortBy != "name", // sorting a collapsed folder needs what's inside it
 		Since:      since,
+		Stat:       f.json || f.stats || f.ai || f.entry,
 	}
 
 	tree, branch, err := load(path, opts, f.git, f.diff)
@@ -254,8 +261,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	p := printer{w: stdout, color: useColor(stdout), sizes: f.size, si: f.si}
-	if f.links && isTerminal(stdout) { // never write escape codes into pipes
+	p := printer{w: stdout, color: useColor(out), sizes: f.size, si: f.si}
+	if f.links && isTerminal(out) { // never write escape codes into pipes
 		p.links = true
 		p.host, _ = os.Hostname()
 	}

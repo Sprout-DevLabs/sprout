@@ -17,6 +17,7 @@ type Options struct {
 	NoIgnore   bool      // disable .gitignore, .sproutignore and the built-in list
 	Sizes      bool      // measure past MaxDepth: true directory sizes and newest times
 	Since      time.Time // if set, only files modified at or after this time
+	Stat       bool      // read sizes and times; a plain tree doesn't need them
 }
 
 // Node is one file or directory in the tree.
@@ -155,9 +156,12 @@ func (w *walker) populate(node *Node, depth int) error {
 			continue
 		}
 
-		info, err := entry.Info()
-		if err != nil {
-			continue // vanished between ReadDir and Lstat
+		// Stat costs a syscall per entry; skip it when nothing will use it.
+		var info os.FileInfo
+		if w.opts.Stat || w.opts.Sizes || !w.opts.Since.IsZero() {
+			if info, err = entry.Info(); err != nil {
+				continue // vanished between ReadDir and Lstat
+			}
 		}
 		if !w.opts.Since.IsZero() && !entry.IsDir() && info.ModTime().Before(w.opts.Since) {
 			if !beyond {
@@ -177,7 +181,7 @@ func (w *walker) populate(node *Node, depth int) error {
 			if err := w.populate(child, depth+1); err != nil {
 				return err
 			}
-		} else {
+		} else if info != nil {
 			child.Size, child.ModTime = info.Size(), info.ModTime()
 		}
 
