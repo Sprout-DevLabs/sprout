@@ -86,21 +86,25 @@ func collectStats(node *Node, s *Stats) {
 	}
 }
 
-func formatSize(bytes int64) string {
-	const unit = 1024
+// formatSize labels binary units honestly (KiB, MiB); si gives kB, MB.
+func formatSize(bytes int64, si bool) string {
+	unit, units := int64(1024), []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	if si {
+		unit, units = 1000, []string{"kB", "MB", "GB", "TB", "PB", "EB"}
+	}
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
 	}
-	div, exp := int64(unit), 0
+	div, exp := unit, 0
 	for n := bytes / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
 }
 
 // PrintStats renders the my-project/ summary shown in the README's --stats example.
-func PrintStats(w io.Writer, t *Tree, path string) {
+func PrintStats(w io.Writer, t *Tree, path string, si bool) {
 	s := &Stats{Languages: make(map[string]int)}
 	collectStats(t.Root, s)
 
@@ -110,7 +114,7 @@ func PrintStats(w io.Writer, t *Tree, path string) {
 	}
 	fmt.Fprintf(w, "Files:          %d\n", s.Files)
 	fmt.Fprintf(w, "Directories:    %d\n", s.Directories)
-	fmt.Fprintf(w, "Total size:     %s\n", formatSize(s.TotalSize))
+	fmt.Fprintf(w, "Total size:     %s\n", formatSize(s.TotalSize, si))
 	if t.Skipped > 0 {
 		fmt.Fprintf(w, "Ignored:        %d entries (--all to include)\n", t.Skipped)
 	}

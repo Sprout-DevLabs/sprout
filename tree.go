@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Options controls how the tree is built.
@@ -14,6 +15,7 @@ type Options struct {
 	Ignore     []string // user patterns (gitignore syntax), always applied
 	Only       []string // if set, only files matching these patterns are shown
 	NoIgnore   bool     // disable .gitignore, .sproutignore and the built-in list
+	Sizes      bool     // measure past MaxDepth: true directory sizes and newest times
 }
 
 // Node is one file or directory in the tree.
@@ -22,7 +24,8 @@ type Node struct {
 	Path     string // filesystem path, for reading
 	Rel      string // slash-separated path relative to the root, for matching git output
 	IsDir    bool
-	Size     int64
+	Size     int64     // files: bytes; directories: total below, with Options.Sizes
+	ModTime  time.Time // directories: newest file below
 	Children []*Node
 	Err      error // set when a directory couldn't be read; the walk continues
 
@@ -115,7 +118,10 @@ func pruneEmpty(n *Node) bool {
 }
 
 func (w *walker) populate(node *Node, depth int) error {
-	if w.opts.MaxDepth >= 0 && depth >= w.opts.MaxDepth {
+	// Past --depth nothing is shown, but with --size the walk continues so
+	// directory totals are true totals, not just what's visible.
+	beyond := w.opts.MaxDepth >= 0 && depth >= w.opts.MaxDepth
+	if beyond && !w.opts.Sizes {
 		node.Truncated = true
 		return nil
 	}
@@ -140,7 +146,9 @@ func (w *walker) populate(node *Node, depth int) error {
 		}
 
 		if w.hides(rel, name, entry.IsDir()) || (w.visible != nil && !w.visible[rel]) {
-			w.skipped++
+			if !beyond {
+				w.skipped++
+			}
 			continue
 		}
 
@@ -161,12 +169,21 @@ func (w *walker) populate(node *Node, depth int) error {
 				return err
 			}
 		} else {
-			child.Size = info.Size()
+			child.Size, child.ModTime = info.Size(), info.ModTime()
 		}
 
+		if w.opts.Sizes {
+			node.Size += child.Size
+		}
+		if child.ModTime.After(node.ModTime) {
+			node.ModTime = child.ModTime
+		}
 		node.Children = append(node.Children, child)
 	}
 
+	if beyond {
+		node.Children, node.Truncated = nil, true
+	}
 	return nil
 }
 
@@ -187,6 +204,8 @@ func (n *Node) Count() (dirs, files int) {
 type printer struct {
 	w     io.Writer
 	color bool
+	sizes bool // show sizes; si picks powers of 1000
+	si    bool
 
 	churnFiles, churnDirs int // --churn scale; 0 when off
 }
@@ -213,6 +232,9 @@ func (p printer) label(n *Node) string {
 		name = paint(p.color, blue+";"+bold, name+"/")
 	case n.Status == "D":
 		name = paint(p.color, red, name)
+	}
+	if p.sizes && (n.Size > 0 || !n.IsDir) {
+		name += "  " + paint(p.color, cyan, humanSize(n.Size, p.si))
 	}
 	if n.Status != "" {
 		name += "  " + paint(p.color, statusColor[n.Status], n.Status)

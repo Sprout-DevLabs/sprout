@@ -21,6 +21,11 @@ Views:
   --stats                 files, size, languages, detected stack
   --json                  tree and stats as JSON (schemaVersion 1)
 
+Sizes and order:
+  --size                  file sizes and true directory totals (du-style, even past --depth)
+  --sort name|size|time   largest or newest first; -r reverses; --dirs-first
+  --si                    powers of 1000 instead of 1024
+
 Annotations:
   --git                   mark changed files: M modified, A added, D deleted, R renamed, ? untracked, U conflict
   --churn                 commits per path, to spot hotspots; --since '90 days ago'
@@ -60,9 +65,10 @@ func main() {
 type flags struct {
 	all, hidden, noIgnore, noConfig       bool
 	stats, json, git, churn, ai, showVers bool
+	size, si, reverse, dirsFirst          bool
 	depth, budget                         int
 	ignore, only                          patternList
-	since, diff                           string
+	since, diff, sortBy                   string
 }
 
 func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
@@ -79,6 +85,12 @@ func newFlagSet(f *flags, stderr io.Writer) *flag.FlagSet {
 	fs.IntVar(&f.depth, "L", -1, "shorthand for --depth")
 	fs.Var(&f.ignore, "ignore", "gitignore-style patterns to hide, comma-separated or repeated")
 	fs.Var(&f.only, "only", "show only files matching these patterns, e.g. '*.go' or 'src/**/*.ts'")
+	fs.BoolVar(&f.size, "size", false, "show file sizes and total directory sizes")
+	fs.BoolVar(&f.si, "si", false, "sizes in powers of 1000 instead of 1024")
+	fs.StringVar(&f.sortBy, "sort", "name", "order entries by name, size (largest first) or time (newest first)")
+	fs.BoolVar(&f.reverse, "reverse", false, "reverse the sort order")
+	fs.BoolVar(&f.reverse, "r", false, "shorthand for --reverse")
+	fs.BoolVar(&f.dirsFirst, "dirs-first", false, "list directories before files")
 	fs.BoolVar(&f.stats, "stats", false, "show project statistics instead of the tree")
 	fs.BoolVar(&f.json, "json", false, "print the tree and statistics as JSON")
 	fs.BoolVar(&f.git, "git", false, "mark changed files with their git status")
@@ -137,6 +149,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	if err := validSort(f.sortBy); err != nil {
+		fmt.Fprintln(stderr, "sprout:", err)
+		return 2
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
@@ -154,6 +171,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Ignore:     f.ignore,
 		Only:       f.only,
 		NoIgnore:   f.noIgnore || f.all,
+		Sizes:      f.size || f.sortBy != "name", // sorting a collapsed folder needs what's inside it
 	}
 
 	tree, branch, err := load(path, opts, f.git, f.diff)
@@ -163,6 +181,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
+	}
+
+	if f.diff == "" && (f.sortBy != "name" || f.reverse || f.dirsFirst) {
+		sortTree(tree.Root, f.sortBy, f.reverse, f.dirsFirst)
 	}
 
 	if f.ai {
@@ -179,11 +201,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if f.stats {
-		PrintStats(stdout, tree, path)
+		PrintStats(stdout, tree, path, f.si)
 		return 0
 	}
 
-	p := printer{w: stdout, color: useColor(stdout)}
+	p := printer{w: stdout, color: useColor(stdout), sizes: f.size, si: f.si}
 	if f.churn {
 		p.churnFiles, p.churnDirs = churnMax(tree.Root)
 	}
