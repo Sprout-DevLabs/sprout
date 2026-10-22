@@ -87,6 +87,9 @@ func runImpact(args []string, root string, stdout, stderr io.Writer) int {
 		res.Source, changed, deleted, err = gitChanges(root, *staged, *diff, *commit)
 	}
 	if err != nil {
+		if len(files) == 0 && strings.Contains(err.Error(), "not inside a git repository") {
+			err = fmt.Errorf("%w; name the changed files instead: sprout impact src/a.ts", err)
+		}
 		fmt.Fprintln(stderr, "sprout:", err)
 		return 1
 	}

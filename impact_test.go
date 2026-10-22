@@ -115,6 +115,22 @@ func TestImpactErrors(t *testing.T) {
 	}
 }
 
+func TestImpactNoRepoHint(t *testing.T) {
+	dir := t.TempDir() // a new empty temporary folder, no .git
+	write(t, dir, "a.go", "package a\n")
+	chdir(t, dir) // go inside that folder
+
+	_, errOut, code := runCLI(t, "impact") // run: sprout impact
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	for _, want := range []string{"not inside a git repository", "name the changed files instead: sprout impact src/a.ts"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("missing %q in stderr: %q", want, errOut)
+		}
+	}
+}
+
 // Python helpers among the tests are followed but not listed as tests to run.
 func TestImpactListsRunnableTests(t *testing.T) {
 	dir := t.TempDir()
