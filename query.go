@@ -181,10 +181,10 @@ func sortHits(hits []queryHit) {
 
 // explain fills in why each hit is there, where it isn't known already.
 func explain(g *Graph, hits []queryHit, reverse bool) {
-	for i := range hits {
+	inParallel(len(hits), func(i int) { // each reason re-reads files
 		h := &hits[i]
 		if h.Reason != "" {
-			continue
+			return
 		}
 		if reverse {
 			h.Reason = g.Why(h.id, h.from)
@@ -194,7 +194,7 @@ func explain(g *Graph, hits []queryHit, reverse bool) {
 		} else {
 			h.Reason = g.Why(h.from, h.id)
 		}
-	}
+	})
 }
 
 func printHits(w io.Writer, g *Graph, cmd, rel string, hits []queryHit) {

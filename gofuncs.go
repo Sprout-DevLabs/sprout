@@ -31,13 +31,15 @@ type goDecl struct {
 
 // packageDecls are the declarations of the Go files in dir, tests included.
 func packageDecls(root, dir string, g *Graph) []goDecl {
-	var decls []goDecl
+	var files []string
 	for _, f := range g.Files {
 		if path.Dir(f.Rel) == dir && strings.HasSuffix(f.Rel, ".go") {
-			decls = append(decls, fileDecls(root, f.Rel)...)
+			files = append(files, f.Rel)
 		}
 	}
-	return resolveMade(decls)
+	each := make([][]goDecl, len(files))
+	inParallel(len(files), func(i int) { each[i] = fileDecls(root, files[i]) })
+	return resolveMade(slices.Concat(each...))
 }
 
 // resolveMade names the type behind x.f() for an x := newT(...): "@newT.f"
@@ -564,27 +566,34 @@ func exportedKeys(hit map[string]bool) map[string]bool {
 // too, which the graph's reasons don't see: x.Name() on a type from dir.
 func importersUsing(root string, g *Graph, dir string, keys map[string]bool) ([]FileID, map[FileID][]string) {
 	seen := map[FileID]bool{}
-	var files []FileID
-	used := map[FileID][]string{}
+	var importers []FileID
 	for i, f := range g.Files {
 		if path.Dir(f.Rel) != dir {
 			continue
 		}
 		for _, c := range g.Dependents(FileID(i)) {
-			if path.Dir(g.Files[c].Rel) == dir || seen[c] {
-				continue
+			if path.Dir(g.Files[c].Rel) != dir && !seen[c] {
+				seen[c] = true
+				importers = append(importers, c)
 			}
-			seen[c] = true
-			for _, d := range resolveMade(fileDecls(root, g.Files[c].Rel)) {
-				for k := range d.refs {
-					if n := strings.TrimPrefix(k, "."); keys[k] && !slices.Contains(used[c], n) {
-						used[c] = append(used[c], n)
-					}
+		}
+	}
+	names := make([][]string, len(importers)) // what each importer uses of keys
+	inParallel(len(importers), func(i int) {
+		for _, d := range resolveMade(fileDecls(root, g.Files[importers[i]].Rel)) {
+			for k := range d.refs {
+				if n := strings.TrimPrefix(k, "."); keys[k] && !slices.Contains(names[i], n) {
+					names[i] = append(names[i], n)
 				}
 			}
-			if used[c] != nil {
-				files = append(files, c)
-			}
+		}
+	})
+	var files []FileID
+	used := map[FileID][]string{}
+	for i, c := range importers {
+		if names[i] != nil {
+			files = append(files, c)
+			used[c] = names[i]
 		}
 	}
 	return files, used

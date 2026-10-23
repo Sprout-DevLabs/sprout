@@ -411,7 +411,7 @@ func testRunner(root, dir, lang string) []string {
 // projectGraph builds the dependency graph of root, tests included; with
 // symbols, each file keeps its declarations' signatures. The last graph of
 // each kind is kept, and reused while no file under root was added,
-// removed, resized or modified: the MCP server answers call after call on
+// removed, resized or modified (one with symbols serves either kind): the MCP server answers call after call on
 // one project, and walking the tree costs far less than parsing it. Not
 // safe for concurrent use; the server answers one call at a time.
 func projectGraph(root string, symbols bool) (*Graph, error) {
@@ -420,8 +420,10 @@ func projectGraph(root string, symbols bool) (*Graph, error) {
 		return nil, err
 	}
 	fp := fingerprint(root, tree.Root)
-	if c := graphCache[symbols]; c.g != nil && c.fp == fp {
-		return c.g, nil
+	for _, kind := range []bool{true, symbols} { // the graph with symbols has every edge too
+		if c := graphCache[kind]; c.g != nil && c.fp == fp {
+			return c.g, nil
+		}
 	}
 	g := buildGraph(root, tree, true, symbols)
 	graphCache[symbols] = cachedGraph{fp, g}
