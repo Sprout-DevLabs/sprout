@@ -214,6 +214,35 @@ Tests: 1 file, 1 Go package
 
 That's 4 of cobra's 260 tests.
 
+## `check`: imports a project forbids
+
+`sprout check` reads rules from `.sproutrules` at the project root, one per
+line, and lists every import that breaks one, with the import or the names
+it uses. Each side is a path from the root: `*` stays within a folder, `**`
+crosses folders, and a trailing `/` means everything under it. Tests aren't
+checked. It exits 1 when a rule is broken, so it can fail a CI job, and works
+for every language Sprout reads, from the same graph as `impact`.
+
+```
+# .sproutrules in kubernetes
+staging/ -> pkg/
+pkg/ -> cmd/
+pkg/kubelet/ -> pkg/controller/
+```
+
+```
+$ sprout check
+1 import breaks .sproutrules (9593 files checked)
+
+.sproutrules:4  pkg/kubelet/ -> pkg/controller/
+  pkg/kubelet/cm/dra/plugin/dra_plugin_manager.go -> pkg/controller/tainteviction/timed_workers.go  uses timedworkers.CreateWorkerQueue, timedworkers.NewWorkArgs, timedworkers.TimedWorkerQueue +1 more
+```
+
+To adopt a rule before every old break is fixed, check only what a pull
+request changed: `sprout check --diff origin/main...HEAD` (with
+`fetch-depth: 0` in GitHub Actions). A rule that matches no file is
+reported, since it's usually a typo. `--json` is for scripts.
+
 ## `context`: before you edit a file
 
 `sprout context FILE` is what to know before changing one file, fitted to a
@@ -393,7 +422,7 @@ The command line always wins. `--no-config` skips both files.
 fields isn't a breaking change. Every other flag applies, so
 `sprout --diff main...HEAD --json` can feed a PR bot directly.
 
-Sprout's `deps`, `dependents`, `impact`, `context` and `tour` commands
+Sprout's `deps`, `dependents`, `impact`, `check`, `context` and `tour` commands
 support `--json` for machine-readable output with a `schemaVersion`.
 The `impact` command reports affected files, tests and test commands for
 supported languages through `testCommands` (Python, TypeScript and

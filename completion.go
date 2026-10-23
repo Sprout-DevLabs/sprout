@@ -62,6 +62,10 @@ var subcommands = []subcommand{
 		{"symbol", "only what uses this function, type or variable", true},
 		{"json", "print JSON", false},
 	}, true},
+	{"check", "imports that break the rules in .sproutrules", []flagInfo{
+		{"diff", "only the files changed in a revision range", true},
+		{"json", "print JSON", false},
+	}, false},
 	{"context", "what to know before editing a file", []flagInfo{
 		{"budget", "approximate token budget", true},
 		{"json", "print JSON", false},
@@ -307,6 +311,11 @@ sprout \- map your codebase, for you and your AI agent
 .RB [ \-\-all ]
 .RB [ \-\-json ]
 .br
+.B sprout check
+.RB [ \-\-diff
+.IR rev ]
+.RB [ \-\-json ]
+.br
 .B sprout context
 .I file
 .RB [ \-\-budget
@@ -334,6 +343,11 @@ changed ones, directly or through others, and the tests that reach them, with a
 \fBgo test\fR command for Go. The change is the files named, or the uncommitted
 changes, \fB\-\-staged\fR, \fB\-\-diff\fR \fIrev\fR or \fB\-\-commit\fR \fIrev\fR.
 .PP
+\fBsprout check\fR reports imports that break the rules in \fI.sproutrules\fR at the
+project root, one \fIfrom\fR \-> \fIto\fR per line, each a glob on paths from the root
+(a trailing slash means everything under a folder). Test files aren't checked.
+\fB\-\-diff\fR \fIrev\fR checks only the files changed in \fIrev\fR. It exits 1 when a rule is broken.
+.PP
 \fBsprout context\fR prints what to know before editing a file, fitted to a token
 budget (\fB\-\-budget\fR, default 1500): what it declares, the signatures it uses from
 each dependency, the files that use it and why, and the tests that reach it.
@@ -344,7 +358,7 @@ excerpt, detected ecosystems, layout, likely entry points and commonly used file
 and top-level directories (default 8, range 1-50), not analysis. Suggestions are
 heuristics. No project code is executed, and tree-view config is not loaded.
 .PP
-To map a folder named like a command (deps, dependents, impact, context, tour), write ./deps.
+To map a folder named like a command (deps, dependents, impact, check, context, tour), write ./deps.
 .SH OPTIONS
 `, time.Now().UTC().Format("2006-01-02"), r.Replace(resolveVersion()))
 	for _, f := range allFlags() {

@@ -25,6 +25,7 @@ Commands
   deps FILE             what FILE depends on, and why
   dependents FILE       what depends on FILE, tests included
   impact [FILE...]      what a change could break, and the tests to run
+  check                 imports that break the rules in .sproutrules
   context FILE          what to know before editing FILE, in a token budget
   mcp [root]            serve it to agents over MCP (--print-config CLIENT)
   Each command has --help. To map a folder named like one, write ./deps.
@@ -185,6 +186,8 @@ func runSubcommand(name string, args []string, stdout, stderr io.Writer) (int, b
 		return runContext(args, "", stdout, stderr), true
 	case "tour":
 		return runTour(args, stdout, stderr), true
+	case "check":
+		return runCheck(args, stdout, stderr), true
 	}
 	return 0, false
 }
