@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	goprinter "go/printer"
 	"go/token"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,35 +115,9 @@ func jsConfigPath(root string) func(string) string {
 // the parsing. With symbols, each file keeps its declarations' signatures,
 // which only --ai prints.
 func buildGraph(root string, t *Tree, tests, symbols bool) *Graph {
-	var nodes []*Node
-	var goMods []*Node
-	var jsConfigs, jsManifests, pyRoots, cargos []string
-	walk(t.Root, func(n *Node) {
-		if n.IsDir || n.Missing {
-			return
-		}
-		switch n.Name {
-		case "tsconfig.json", "jsconfig.json":
-			jsConfigs = append(jsConfigs, n.Rel)
-		case "package.json":
-			jsManifests = append(jsManifests, n.Rel)
-		case "Cargo.toml":
-			cargos = append(cargos, n.Rel)
-		case "pyproject.toml", "setup.py", "setup.cfg":
-			pyRoots = append(pyRoots, path.Dir(n.Rel), path.Join(path.Dir(n.Rel), "src"))
-		}
-		isMod, lang := n.Name == "go.mod", langOf(n.Name) // cheap checks first: this visits every file
-		if (!isMod && lang == "") || inDir(n.Rel, graphSkip) {
-			return
-		}
-		if isMod {
-			goMods = append(goMods, n)
-		} else if len(nodes) < maxGraphFiles && (tests || !isTestRel(n.Rel)) {
-			nodes = append(nodes, n)
-		}
-	})
-	// Parsing allocates heavily and briefly; trade some memory for less GC.
-	defer debug.SetGCPercent(debug.SetGCPercent(400))
+	src := graphSources(t, tests)
+	nodes := src.nodes
+	defer parseMemory(len(nodes))()
 
 	b := newGraphBuilder(len(nodes))
 	exists := map[string]bool{}
@@ -150,31 +125,18 @@ func buildGraph(root string, t *Tree, tests, symbols bool) *Graph {
 		b.add(GraphFile{Rel: n.Rel, Test: isTestRel(n.Rel)})
 		exists[n.Rel] = true
 	}
-	r := resolver{exists: exists, goModules: goModules(t, goMods), javaIndex: javaIndex(nodes), pyRoots: pyRoots}
+	r := resolver{exists: exists, goModules: goModules(t, src.goMods), javaIndex: javaIndex(nodes), pyRoots: src.pyRoots}
 	r.pyExports = pyReexports(nodes, t, r)
-	r.rs = loadRSProject(cargos, func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }, exists)
-	if len(jsConfigs)+len(jsManifests) > 0 {
-		r.js = loadJSProject(jsConfigs, jsManifests, jsConfigPath(root))
+	r.rs = loadRSProject(src.cargos, func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }, exists)
+	if len(src.jsConfigs)+len(src.jsManifests) > 0 {
+		r.js = loadJSProject(src.jsConfigs, src.jsManifests, jsConfigPath(root))
 	}
 
 	// Parse in parallel: reading and parsing dominate on large repos.
 	facts := make([]fileFacts, len(nodes))
-	next := make(chan int)
-	var wg sync.WaitGroup
-	for w := 0; w < runtime.NumCPU(); w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range next {
-				facts[i] = parseSource(nodes[i], t.FSPath(nodes[i]), symbols && !b.files[i].Test, r)
-			}
-		}()
-	}
-	for i := range nodes {
-		next <- i
-	}
-	close(next)
-	wg.Wait()
+	inParallel(len(nodes), func(i int) {
+		facts[i] = parseSource(nodes[i], t.FSPath(nodes[i]), symbols && !b.files[i].Test, r)
+	})
 
 	for i, f := range facts {
 		b.files[i].Symbols = f.symbols
@@ -188,32 +150,113 @@ func buildGraph(root string, t *Tree, tests, symbols bool) *Graph {
 	return g
 }
 
+// sources are what a graph is built from: the source files, and the
+// manifests and configs that say how their imports resolve.
+type sources struct {
+	nodes, goMods                           []*Node
+	jsConfigs, jsManifests, pyRoots, cargos []string
+}
+
+func graphSources(t *Tree, tests bool) sources {
+	var s sources
+	walk(t.Root, func(n *Node) {
+		if n.IsDir || n.Missing {
+			return
+		}
+		switch n.Name {
+		case "tsconfig.json", "jsconfig.json":
+			s.jsConfigs = append(s.jsConfigs, n.Rel)
+		case "package.json":
+			s.jsManifests = append(s.jsManifests, n.Rel)
+		case "Cargo.toml":
+			s.cargos = append(s.cargos, n.Rel)
+		case "pyproject.toml", "setup.py", "setup.cfg":
+			s.pyRoots = append(s.pyRoots, path.Dir(n.Rel), path.Join(path.Dir(n.Rel), "src"))
+		}
+		isMod, lang := n.Name == "go.mod", langOf(n.Name) // cheap checks first: this visits every file
+		if (!isMod && lang == "") || inDir(n.Rel, graphSkip) {
+			return
+		}
+		if isMod {
+			s.goMods = append(s.goMods, n)
+		} else if len(s.nodes) < maxGraphFiles && (tests || !isTestRel(n.Rel)) {
+			s.nodes = append(s.nodes, n)
+		}
+	})
+	return s
+}
+
+// parseMemory sets the garbage collector for parsing files, and returns
+// what restores it. Parsing allocates heavily and briefly; trade some memory
+// for less GC, up to a soft limit: in Kubernetes, 13k files peak at ~110 MB
+// live, and the limit halves peak memory (450 MB to 240 MB) at the same speed.
+func parseMemory(files int) (restore func()) {
+	gc := debug.SetGCPercent(400)
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 { // GOMEMLIMIT unset
+		debug.SetMemoryLimit(max(256<<20, int64(files)*20<<10))
+	}
+	return func() {
+		debug.SetGCPercent(gc)
+		debug.SetMemoryLimit(limit)
+	}
+}
+
+// inParallel runs f(0) to f(n-1), one goroutine per CPU.
+func inParallel(n int, f func(i int)) {
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < runtime.NumCPU(); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				f(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+}
+
 // explainer answers Graph.Why by re-reading the two files: for Go, the
 // names one uses from the other; for the rest, the import that resolved to
-// it. Graph.Files[i] is nodes[i]. It isn't safe for concurrent use.
+// it. Graph.Files[i] is nodes[i]. It's safe for concurrent use.
 func explainer(t *Tree, nodes []*Node, r resolver) func(from, to FileID) (string, []string) {
 	// A query asks about many edges into or out of one file: parse each file once.
+	var mu sync.Mutex
 	goCache, specCache := map[FileID]*goFacts{}, map[FileID][]string{}
 	parseGo := func(id FileID) *goFacts {
-		if gf, ok := goCache[id]; ok {
+		mu.Lock()
+		gf, ok := goCache[id]
+		mu.Unlock()
+		if ok {
 			return gf
 		}
-		var gf *goFacts
 		if src, err := os.ReadFile(t.FSPath(nodes[id])); err == nil {
 			_, gf = goDecls(nodes[id].Name, src, false)
 		}
+		mu.Lock()
 		goCache[id] = gf
+		mu.Unlock()
 		return gf
 	}
 	return func(from, to FileID) (string, []string) {
 		fn, tn := nodes[from], nodes[to]
 		if lang := langOf(fn.Name); lang != "go" {
+			mu.Lock()
 			specs, ok := specCache[from]
+			mu.Unlock()
 			if !ok {
 				if src, err := os.ReadFile(t.FSPath(fn)); err == nil {
 					_, specs = scanDecls(lang, src, false)
 				}
+				mu.Lock()
 				specCache[from] = specs
+				mu.Unlock()
 			}
 			return importReason(r, lang, fn.Rel, tn.Rel, specs), nil
 		}

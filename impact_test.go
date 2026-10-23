@@ -255,8 +255,12 @@ func TestProjectGraphCache(t *testing.T) {
 	if g2, _ := projectGraph(dir, false); g2 != g1 {
 		t.Error("an unchanged project should reuse its graph")
 	}
-	if g3, _ := projectGraph(dir, true); g3 == g1 {
+	g3, _ := projectGraph(dir, true)
+	if g3 == g1 {
 		t.Error("a graph without symbols shouldn't answer for one with them")
+	}
+	if g, _ := projectGraph(dir, false); g != g3 {
+		t.Error("a graph with symbols has every edge: it should answer for one without")
 	}
 	write(t, dir, "d/d.go", "package d\n\nimport \"ex/c\"\n\nvar D = c.C\n")
 	g4, _ := projectGraph(dir, false)

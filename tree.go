@@ -5,6 +5,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -70,7 +73,8 @@ type walker struct {
 	ignore  matcher
 	only    matcher         // nil: every file
 	visible map[string]bool // nil unless GitAware
-	skipped int
+	skipped atomic.Int64
+	slots   chan struct{} // goroutines free to fill a directory; when none are, the walk continues inline
 }
 
 // BuildTree walks root according to opts and returns the resulting tree.
@@ -88,7 +92,7 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 
 	patterns := []string{".git/"}
 	t := &Tree{}
-	w := &walker{opts: opts}
+	w := &walker{opts: opts, slots: make(chan struct{}, runtime.NumCPU())}
 	if !opts.NoIgnore {
 		if w.visible, t.GitAware = gitVisible(root); !t.GitAware {
 			patterns = append(patterns, defaultIgnores...)
@@ -113,7 +117,7 @@ func BuildTree(root string, opts Options) (*Tree, error) {
 	if w.only != nil || !opts.Since.IsZero() {
 		pruneEmpty(node)
 	}
-	t.Root, t.Skipped, t.hides = node, w.skipped, w.hides
+	t.Root, t.Skipped, t.hides = node, int(w.skipped.Load()), w.hides
 	return t, nil
 }
 
@@ -209,40 +213,60 @@ func (w *walker) populate(node *Node, dir string, depth int) error {
 	slab := make([]Node, 0, len(entries))
 	node.Children = make([]*Node, 0, len(entries))
 
+	// Directories fill in parallel: listing them is syscalls, nearly all of
+	// a walk. The totals below wait for every one.
+	var wg sync.WaitGroup
 	for _, entry := range entries {
 		rel, name := childPath(node.Rel, entry.Name())
 		info, shown, hidden := w.admit(entry, rel, name)
 		if !shown {
 			if hidden && !beyond {
-				w.skipped++
+				w.skipped.Add(1)
 			}
 			continue
 		}
 
 		slab = append(slab, Node{Name: name, Rel: rel, IsDir: entry.IsDir(), Special: special(entry)})
 		child := &slab[len(slab)-1]
+		node.Children = append(node.Children, child)
 
 		if child.IsDir {
-			if err := w.populate(child, filepath.Join(dir, name), depth+1); err != nil {
-				return err
-			}
+			w.fill(child, filepath.Join(dir, name), depth+1, &wg)
 		} else if info != nil {
 			child.Size, child.ModTime = info.Size(), info.ModTime()
 		}
-
+	}
+	wg.Wait()
+	for _, child := range node.Children {
 		if w.opts.Sizes {
 			node.Size += child.Size
 		}
 		if child.ModTime.After(node.ModTime) {
 			node.ModTime = child.ModTime
 		}
-		node.Children = append(node.Children, child)
 	}
 
 	if beyond {
 		node.Children, node.Truncated = nil, true
 	}
 	return nil
+}
+
+// fill populates the directory node at dir, on a goroutine of its own if
+// one is free (wg waits for it), else inline. Below the root, errors are
+// kept on the node, so there's none to return.
+func (w *walker) fill(node *Node, dir string, depth int, wg *sync.WaitGroup) {
+	select {
+	case w.slots <- struct{}{}:
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.populate(node, dir, depth)
+			<-w.slots
+		}()
+	default:
+		w.populate(node, dir, depth)
+	}
 }
 
 // Count returns the number of directories and files below node, including
