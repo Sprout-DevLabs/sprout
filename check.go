@@ -156,14 +156,8 @@ func checkGraph(g *Graph, rules []checkRule, only map[string]bool) checkResult {
 	res := checkResult{SchemaVersion: 1, Command: "check", Violations: []violation{}}
 	to := make([][]bool, len(rules)) // to[r][id]: file id matches rule r's right side
 	for r, rule := range rules {
-		to[r] = make([]bool, len(g.Files))
-		matchedFrom, matchedTo := false, false
-		for id, f := range g.Files {
-			to[r][id] = rule.to.MatchString(f.Rel)
-			matchedTo = matchedTo || to[r][id]
-			matchedFrom = matchedFrom || rule.from.MatchString(f.Rel)
-		}
-		if !matchedFrom || !matchedTo {
+		var matched bool
+		if to[r], matched = ruleTargets(g, rule); !matched {
 			res.Unmatched = append(res.Unmatched, rule)
 		}
 	}
@@ -186,6 +180,19 @@ func checkGraph(g *Graph, rules []checkRule, only map[string]bool) checkResult {
 		}
 	}
 	return res
+}
+
+// ruleTargets marks the files matching rule's right side; matched is
+// whether both sides match a file.
+func ruleTargets(g *Graph, rule checkRule) (to []bool, matched bool) {
+	to = make([]bool, len(g.Files))
+	from, target := false, false
+	for id, f := range g.Files {
+		to[id] = rule.to.MatchString(f.Rel)
+		target = target || to[id]
+		from = from || rule.from.MatchString(f.Rel)
+	}
+	return to, from && target
 }
 
 func printCheck(w io.Writer, res checkResult, rules int, diff string) {
