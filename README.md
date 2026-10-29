@@ -6,7 +6,6 @@
 [![Release](https://img.shields.io/github/v/release/Sprout-DevLabs/sprout)](https://github.com/Sprout-DevLabs/sprout/releases)
 [![GitHub stars](https://img.shields.io/github/stars/Sprout-DevLabs/sprout?style=flat&logo=github)](https://github.com/Sprout-DevLabs/sprout/stargazers)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![DeepSource](https://app.deepsource.com/gh/Sprout-DevLabs/sprout.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/Sprout-DevLabs/sprout/)
 [![Go version](https://img.shields.io/github/go-mod/go-version/Sprout-DevLabs/sprout)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-sprout--web-blue)](https://sprout-devlabs.github.io/sprout-web/docs/)
 [![Good first issues](https://img.shields.io/github/issues/Sprout-DevLabs/sprout/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/Sprout-DevLabs/sprout/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
