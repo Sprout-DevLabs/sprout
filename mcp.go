@@ -274,7 +274,7 @@ func serveMCP(args []string, in io.Reader, out, errOut io.Writer) int {
 		root = args[0]
 	}
 	if root == "-h" || root == "--help" || root == "-help" {
-		fmt.Fprintln(out, "Usage: sprout mcp [root]\n       sprout mcp --print-config claude-code|cursor|vscode|claude-desktop [project]\n\nServes Sprout to coding agents over MCP on stdio, for the project at root.\nWithout one, the folder the client says is open (MCP roots), else the current folder.\n--print-config prints the setup for a client, with this sprout's full path.")
+		fmt.Fprintln(out, "Usage: sprout mcp [root]\n       sprout mcp --print-config claude-code|cursor|vscode|claude-desktop|windsurf|zed|codex [project]\n\nServes Sprout to coding agents over MCP on stdio, for the project at root.\nWithout one, the folder the client says is open (MCP roots), else the current folder.\n--print-config prints the setup for a client, with this sprout's full path.")
 		return 0
 	}
 	if root == "--print-config" {
@@ -406,7 +406,7 @@ var mcpWords = strings.NewReplacer("--budget", "budget", "--all", "all")
 // printMCPConfig prints a client's setup for this sprout: args are the
 // client and, for clients that don't know the project, its folder.
 func printMCPConfig(args []string, out, errOut io.Writer) int {
-	clients := "claude-code, cursor, vscode or claude-desktop"
+	clients := "claude-code, cursor, vscode, claude-desktop, windsurf, zed or codex"
 	if len(args) == 0 || len(args) > 2 {
 		fmt.Fprintln(errOut, "sprout mcp: --print-config needs a client:", clients)
 		return 2
@@ -440,6 +440,17 @@ func printMCPConfig(args []string, out, errOut io.Writer) int {
 		config, where = map[string]any{"servers": map[string]any{"sprout": server(map[string]any{"type": "stdio"}, "${workspaceFolder}")}}, ".vscode/mcp.json in your project"
 	case "claude-desktop":
 		config, where = map[string]any{"mcpServers": map[string]any{"sprout": server(nil, project)}}, "Claude Desktop: Settings > Developer > Edit Config"
+	case "windsurf":
+		config, where = map[string]any{"mcpServers": map[string]any{"sprout": server(nil, project)}}, "~/.codeium/windsurf/mcp_config.json"
+	case "zed":
+		config, where = map[string]any{"context_servers": map[string]any{"sprout": server(nil, project)}}, "Zed's settings.json (zed: open settings file)"
+	case "codex":
+		// JSON strings are also TOML basic strings, including escaped Windows paths.
+		command, _ := json.Marshal(exe)
+		root, _ := json.Marshal(project)
+		fmt.Fprintln(errOut, "Put this in ~/.codex/config.toml:")
+		fmt.Fprintf(out, "[mcp_servers.sprout]\ncommand = %s\nargs = [\"mcp\", %s]\n", command, root)
+		return 0
 	default:
 		fmt.Fprintf(errOut, "sprout mcp: unknown client %q; use %s\n", args[0], clients)
 		return 2

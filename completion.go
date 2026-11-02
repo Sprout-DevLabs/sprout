@@ -71,7 +71,7 @@ var subcommands = []subcommand{
 		{"json", "print JSON", false},
 	}, true},
 	{"mcp", "serve Sprout to coding agents over MCP", []flagInfo{
-		{"print-config", "print the setup for a client: claude-code, cursor, vscode or claude-desktop", true},
+		{"print-config", "print the setup for a client: claude-code, cursor, vscode, claude-desktop, windsurf, zed or codex", true},
 	}, false},
 	{"tour", "guided repository onboarding", []flagInfo{
 		{"json", "print versioned JSON", false},
