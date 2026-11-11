@@ -269,7 +269,7 @@ func TestMCPBudgetNote(t *testing.T) {
 
 // --print-config prints valid setup for each client, with sprout's path.
 func TestMCPPrintConfig(t *testing.T) {
-	for client, key := range map[string]string{"cursor": "mcpServers", "vscode": "servers", "claude-desktop": "mcpServers"} {
+	for client, key := range map[string]string{"cursor": "mcpServers", "vscode": "servers", "claude-desktop": "mcpServers", "windsurf": "mcpServers", "zed": "context_servers"} {
 		var out, errOut bytes.Buffer
 		if code := serveMCP([]string{"--print-config", client}, strings.NewReader(""), &out, &errOut); code != 0 {
 			t.Fatalf("%s: exit %d: %s", client, code, errOut.String())
@@ -291,7 +291,7 @@ func TestMCPPrintConfig(t *testing.T) {
 	if !strings.HasPrefix(out.String(), "claude mcp add sprout -- ") {
 		t.Errorf("claude-code: %q", out.String())
 	}
-	if code := serveMCP([]string{"--print-config", "zed"}, strings.NewReader(""), &out, &errOut); code != 2 {
+	if code := serveMCP([]string{"--print-config", "unknown-client"}, strings.NewReader(""), &out, &errOut); code != 2 {
 		t.Errorf("unknown client: exit %d", code)
 	}
 }
@@ -479,5 +479,80 @@ func TestMCPFollowsRootChange(t *testing.T) {
 	}
 	if out := rootsSession(t, []string{first}, []string{second}, changed...); strings.Contains(out, "in_second.txt") || strings.Contains(out, "roots/list") {
 		t.Errorf("a command-line root moved:\n%s", out)
+	}
+}
+
+// New clients use a fixed project, including paths that need escaping.
+func TestMCPPrintConfigProjects(t *testing.T) {
+	for _, project := range []string{".", filepath.Join("project with spaces", `quoted"name`, `back\slash`, "café")} {
+		root, err := filepath.Abs(project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct{ client, key, where string }{
+			{"windsurf", "mcpServers", "~/.codeium/windsurf/mcp_config.json"},
+			{"zed", "context_servers", "settings.json"},
+			{"codex", "", "~/.codex/config.toml"},
+		} {
+			t.Run(tc.client+"/"+project, func(t *testing.T) {
+				var out, errOut bytes.Buffer
+				args := []string{"--print-config", tc.client}
+				if project != "." {
+					args = append(args, project)
+				}
+				if code := serveMCP(args, strings.NewReader(""), &out, &errOut); code != 0 {
+					t.Fatalf("exit %d: %s", code, errOut.String())
+				}
+				var command string
+				var mcpArgs []string
+				if tc.client == "codex" {
+					lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+					if len(lines) != 3 || lines[0] != "[mcp_servers.sprout]" || !strings.HasPrefix(lines[1], "command = ") || !strings.HasPrefix(lines[2], "args = ") {
+						t.Fatalf("not the expected TOML table:\n%s", out.String())
+					}
+					// These TOML basic strings and arrays are also valid JSON.
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "command = ")), &command); err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[2], "args = ")), &mcpArgs); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					var cfg map[string]map[string]struct {
+						Command string   `json:"command"`
+						Args    []string `json:"args"`
+					}
+					if err := json.Unmarshal(out.Bytes(), &cfg); err != nil {
+						t.Fatal(err)
+					}
+					command, mcpArgs = cfg[tc.key]["sprout"].Command, cfg[tc.key]["sprout"].Args
+				}
+				if command != runningSprout() || !filepath.IsAbs(command) || len(mcpArgs) != 2 || mcpArgs[0] != "mcp" || mcpArgs[1] != root {
+					t.Errorf("command %q, args %q; want %q mcp %q", command, mcpArgs, runningSprout(), root)
+				}
+				if !strings.Contains(errOut.String(), tc.where) {
+					t.Errorf("missing config location %q: %s", tc.where, errOut.String())
+				}
+			})
+		}
+	}
+}
+
+func TestMCPPrintConfigClientList(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--print-config"}, {"--print-config", "unknown-client"}} {
+		var out, errOut bytes.Buffer
+		code := serveMCP(args, strings.NewReader(""), &out, &errOut)
+		wantCode, text := 2, errOut.String()
+		if args[0] == "--help" {
+			wantCode, text = 0, out.String()
+		}
+		if code != wantCode {
+			t.Errorf("%v: exit %d, want %d", args, code, wantCode)
+		}
+		for _, client := range []string{"windsurf", "zed", "codex"} {
+			if !strings.Contains(text, client) {
+				t.Errorf("%v: missing %s in %q", args, client, text)
+			}
+		}
 	}
 }

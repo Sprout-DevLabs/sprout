@@ -82,7 +82,8 @@ claude mcp add sprout -- sprout mcp
 ```
 
 Or let Sprout print it with your `sprout`'s full path filled in:
-`sprout mcp --print-config cursor` (or `vscode`, `claude-desktop`, `claude-code`).
+`sprout mcp --print-config cursor` (or `vscode`, `claude-desktop`,
+`claude-code`, `windsurf`, `zed`, or `codex`).
 
 **Claude Desktop**: Settings → Developer → Edit Config, which opens
 `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or
