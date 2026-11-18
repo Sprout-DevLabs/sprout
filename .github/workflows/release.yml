@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # publish the GitHub release
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -21,6 +23,7 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        id: goreleaser
         with:
           version: "~> v2"
           args: release --clean
@@ -28,3 +31,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Fine-grained PAT with Contents: write on Sprout-DevLabs/homebrew-tap.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      # checksums.txt lists every archive and package; it becomes the
+      # provenance subject so each file can be verified against the build.
+      - name: Hash release files for provenance
+        id: hash
+        env:
+          ARTIFACTS: ${{ steps.goreleaser.outputs.artifacts }}
+        run: |
+          set -euo pipefail
+          checksums=$(echo "$ARTIFACTS" | jq -r '.[] | select(.type == "Checksum") | .path')
+          echo "hashes=$(base64 -w0 < "$checksums")" >> "$GITHUB_OUTPUT"
+
+  # SLSA level 3 provenance, uploaded to the release as multiple.intoto.jsonl.
+  # Verify with: slsa-verifier verify-artifact <file> --provenance-path multiple.intoto.jsonl --source-uri github.com/Sprout-DevLabs/sprout
+  provenance:
+    needs: release
+    permissions:
+      actions: read # read the workflow run
+      id-token: write # sign the provenance with Sigstore
+      contents: write # upload it to the release
+    # Referenced by tag, not SHA: the generator verifies its own tag, and Scorecard allows it.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true
