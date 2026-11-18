@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -193,12 +194,67 @@ func TestImpactTestCommands(t *testing.T) {
 	}
 }
 
+// Rust integration tests, the files right in a crate's tests/ folder, are
+// cargo test targets: each crate gets its own command, run from the crate.
+// Helpers under tests/ aren't targets, and with autotests = false only the
+// [[test]] targets Cargo.toml declares are, by their declared names.
+func TestImpactCargoTestCommands(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n")
+	write(t, dir, "crates/demo/Cargo.toml", "[package]\nname = \"demo\"\n")
+	write(t, dir, "crates/demo/src/lib.rs", "pub mod parse;\n")
+	write(t, dir, "crates/demo/src/parse.rs", "pub fn parse() {}\n")
+	write(t, dir, "crates/demo/tests/parse_test.rs", "use demo::parse::parse;\n")
+	write(t, dir, "crates/demo/tests/other_test.rs", "mod common;\nuse demo::parse;\n")
+	write(t, dir, "crates/demo/tests/common/mod.rs", "use demo::parse::parse;\npub fn setup() {}\n")
+	write(t, dir, "crates/cli/Cargo.toml", "[package]\nname = \"cli\"\nautotests = false # like ripgrep\n\n[[test]]\nname = \"integration\"\npath = \"tests/tests.rs\"\n")
+	write(t, dir, "crates/cli/src/lib.rs", "pub fn run() { demo::parse::parse(); }\n")
+	write(t, dir, "crates/cli/tests/tests.rs", "mod util;\n")
+	write(t, dir, "crates/cli/tests/util.rs", "use cli::run;\n")
+	chdir(t, dir)
+
+	out, errOut, code := runCLI(t, "impact", "crates/demo/src/parse.rs", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	var res impactResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	want := []testCmd{
+		{Dir: "crates/cli", Argv: []string{"cargo", "test", "--test", "integration"}},
+		{Dir: "crates/demo", Argv: []string{"cargo", "test", "--test", "other_test", "--test", "parse_test"}},
+	}
+	if !reflect.DeepEqual(res.TestCommands, want) {
+		t.Fatalf("test commands: %+v\ntests: %v", res.TestCommands, res.Tests)
+	}
+
+	text, _, _ := runCLI(t, "impact", "crates/demo/src/parse.rs")
+	for _, line := range []string{
+		"  in crates/demo/:\n    cargo test --test other_test --test parse_test",
+		"  in crates/cli/:\n    cargo test --test integration",
+	} {
+		if !strings.Contains(text, line+"\n") {
+			t.Errorf("missing %q in:\n%s", line, text)
+		}
+	}
+	for _, helper := range []string{"crates/demo/tests/common/mod.rs", "crates/cli/tests/util.rs"} {
+		if strings.Contains(text, "--test "+strings.TrimSuffix(path.Base(helper), ".rs")) {
+			t.Errorf("%s is not a test target:\n%s", helper, text)
+		}
+	}
+}
+
 // Test paths come from the repository. A command line is only offered when
 // every path is safe unquoted in any shell; otherwise the tests are listed.
 func TestCommandLineSafety(t *testing.T) {
 	safe := testCmd{Dir: "backend", Argv: []string{"python", "-m", "pytest", "tests/test_a.py"}, runner: 3}
 	if lines, ok := commandLine(safe, false); !ok || !reflect.DeepEqual(lines, []string{"in backend/:", "  python -m pytest tests/test_a.py"}) {
 		t.Errorf("safe command: %q %v", lines, ok)
+	}
+	cargo := testCmd{Dir: "crates/demo", Argv: []string{"cargo", "test", "--test", "parse_test"}, runner: 2, flag: "--test"}
+	if lines, ok := commandLine(cargo, false); !ok || !reflect.DeepEqual(lines, []string{"in crates/demo/:", "  cargo test --test parse_test"}) {
+		t.Errorf("cargo command: %q %v", lines, ok)
 	}
 	// Past 12 files the note goes on its own line: the command stays valid.
 	many := testCmd{Dir: ".", Argv: []string{"npx", "jest"}, runner: 2}
@@ -215,7 +271,9 @@ func TestCommandLineSafety(t *testing.T) {
 		{Dir: ".", Argv: []string{"python", "-m", "pytest", "tests/it's $(x).py"}, runner: 3},
 		{Dir: ".", Argv: []string{"npx", "jest", "a&calc.test.js"}, runner: 2}, // cmd.exe runs calc
 		{Dir: "my app", Argv: []string{"npx", "jest", "a.test.js"}, runner: 2},
-		{Dir: ".", Argv: []string{"npx", "jest", "--config=evil.js"}, runner: 2}, // read as an option
+		{Dir: ".", Argv: []string{"npx", "jest", "--config=evil.js"}, runner: 2},                  // read as an option
+		{Dir: ".", Argv: []string{"cargo", "test", "--test", "-evil"}, runner: 2, flag: "--test"}, // a target read as an option
+		{Dir: ".", Argv: []string{"cargo", "test", "--release", "a"}, runner: 2, flag: "--test"},  // only Sprout's own flag is let through
 	} {
 		if lines, ok := commandLine(bad, false); ok {
 			t.Errorf("unsafe command offered: %s", lines)

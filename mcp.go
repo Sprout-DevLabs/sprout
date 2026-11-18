@@ -192,7 +192,7 @@ var graphTools = []mcpTool{
 		Name: "impact",
 		Description: "What a change could break: every file depending on the changed ones, directly or through " +
 			"others, and the tests to run, with the command to run them (go test narrowed with -run, pytest, " +
-			"vitest or jest). The change is the given files, or from git: uncommitted changes (default), " +
+			"vitest or jest, cargo test --test). The change is the given files, or from git: uncommitted changes (default), " +
 			"staged, a revision range, or one commit. For one function, class, type or variable, give one file " +
 			"and symbol. Use after editing, before running tests or opening a pull request.",
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{

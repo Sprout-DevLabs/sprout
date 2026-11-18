@@ -164,8 +164,9 @@ named `tour`, write `sprout ./tour`.
 
 `sprout impact` traces a change through the graph: every file that depends on
 it, directly or through others, and every test that reaches it, with a command
-to run them: `go test` for Go, `pytest` for Python, and `vitest`, `jest`, `ava`
-or `mocha` for TypeScript and JavaScript when the project uses one. With no
+to run them: `go test` for Go, `pytest` for Python, `vitest`, `jest`, `ava`
+or `mocha` for TypeScript and JavaScript when the project uses one, and
+`cargo test --test` for Rust integration tests. With no
 arguments it uses your uncommitted changes;
 `--staged`, `--diff main...HEAD` and `--commit HEAD` take them from git, or name
 the files. `--all` lists every affected file and `--json` is for scripts and CI.
