@@ -31,7 +31,7 @@ type impactResult struct {
 
 	goReach      map[string][2]int // package not narrowed -> how many of its tests reach the change, of all
 	Symbol       string            `json:"symbol,omitempty"`
-	TestCommands []testCmd         `json:"testCommands,omitempty"` // Python and JS/TS tests, by project
+	TestCommands []testCmd         `json:"testCommands,omitempty"` // Python, JS/TS and Rust tests, by project
 
 	base string // with nothing uncommitted: the branch to suggest --diff against
 }
@@ -42,6 +42,16 @@ type testCmd struct {
 	Dir    string   `json:"dir"`
 	Argv   []string `json:"argv"`
 	runner int      // Argv[:runner] is the runner, the rest test files
+	flag   string   // if set, each test is two arguments, flag then name: cargo's --test parse_test
+	files  []string // with flag: the file of each test, relative to Dir
+}
+
+// tests are the files c runs, relative to c.Dir.
+func (c testCmd) tests() []string {
+	if c.flag != "" {
+		return c.files
+	}
+	return c.Argv[c.runner:]
 }
 
 // runImpact runs impact. root is the project root; "" finds it from the
@@ -317,13 +327,19 @@ var pyProjectFiles = []string{"pyproject.toml", "setup.cfg", "tox.ini", "pytest.
 // testCommands groups Python and JS/TS tests by the project they belong to,
 // the nearest folder with a Python project file or package.json, and builds
 // that project's test command when its runner is recognisable: pytest,
-// vitest or jest. Tests with no recognisable runner aren't given one.
+// vitest or jest. Tests with no recognisable runner aren't given one. Rust
+// integration tests, the files right in a crate's tests/ folder, each get a
+// --test target in their crate's cargo test.
 func testCommands(root string, tests []string) []testCmd {
 	runners := map[string][]string{} // "lang dir" -> runner, read once
 	var cmds []testCmd
 	index := map[string]int{} // "dir runner" -> its command in cmds
 	for _, t := range tests {
 		lang := langOf(path.Base(t))
+		if lang == "rs" {
+			cmds = cargoTest(root, t, cmds, index)
+			continue
+		}
 		if lang != "py" && lang != "js" {
 			continue
 		}
@@ -344,7 +360,7 @@ func testCommands(root string, tests []string) []testCmd {
 		k := dir + " " + strings.Join(runner, " ")
 		if _, ok := index[k]; !ok {
 			index[k] = len(cmds)
-			cmds = append(cmds, testCmd{dir, append([]string{}, runner...), len(runner)})
+			cmds = append(cmds, testCmd{Dir: dir, Argv: append([]string{}, runner...), runner: len(runner)})
 		}
 		rel := t
 		if dir != "." {
@@ -353,6 +369,87 @@ func testCommands(root string, tests []string) []testCmd {
 		cmds[index[k]].Argv = append(cmds[index[k]].Argv, rel)
 	}
 	return cmds
+}
+
+// cargoTest adds t to its crate's cargo test command when t is an
+// integration test target: a .rs file directly in tests/ next to a
+// Cargo.toml, or a [[test]] the manifest declares. With autotests = false
+// only declared targets count. Helpers in tests/ subfolders, modules of a
+// declared target and inline #[cfg(test)] modules aren't targets of their
+// own, so they're left out.
+func cargoTest(root, t string, cmds []testCmd, index map[string]int) []testCmd {
+	testsDir := path.Dir(t)
+	if path.Base(testsDir) != "tests" {
+		return cmds
+	}
+	crate := path.Dir(testsDir)
+	if nearestWith(root, crate, []string{"Cargo.toml"}) != crate {
+		return cmds
+	}
+	manifest, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(crate), "Cargo.toml"))
+	declared, auto := cargoTestTargets(string(manifest))
+	file := path.Join("tests", path.Base(t)) // relative to the crate
+	name, ok := declared[file]
+	if !ok {
+		if !auto {
+			return cmds
+		}
+		name = strings.TrimSuffix(path.Base(t), ".rs")
+	}
+	k := crate + " cargo test"
+	if _, ok := index[k]; !ok {
+		index[k] = len(cmds)
+		cmds = append(cmds, testCmd{Dir: crate, Argv: []string{"cargo", "test"}, runner: 2, flag: "--test"})
+	}
+	c := &cmds[index[k]]
+	c.Argv = append(c.Argv, "--test", name)
+	c.files = append(c.files, file)
+	return cmds
+}
+
+// cargoTestTargets reads a Cargo.toml's [[test]] tables, as path -> name
+// (path defaults to tests/<name>.rs), and whether cargo also finds tests/*.rs
+// on its own (autotests isn't false). A line scan, not a TOML parser: it
+// reads the plain key = "value" lines manifests use for these.
+func cargoTestTargets(manifest string) (declared map[string]string, auto bool) {
+	declared = map[string]string{}
+	auto = true
+	section, name, file := "", "", ""
+	flush := func() {
+		if section == "[[test]]" && name != "" {
+			if file == "" {
+				file = "tests/" + name + ".rs"
+			}
+			declared[path.Clean(strings.TrimPrefix(file, "./"))] = name
+		}
+		name, file = "", ""
+	}
+	for _, line := range strings.Split(manifest, "\n") {
+		line = strings.TrimSpace(line)
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		if strings.HasPrefix(line, "[") {
+			flush()
+			section = line
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key, val = strings.TrimSpace(key), strings.Trim(strings.TrimSpace(val), `"'`)
+		switch {
+		case section == "[package]" && key == "autotests":
+			auto = val != "false"
+		case section == "[[test]]" && key == "name":
+			name = val
+		case section == "[[test]]" && key == "path":
+			file = val
+		}
+	}
+	flush()
+	return declared, auto
 }
 
 // nearestWith is the closest folder from dir up to the root holding one of
@@ -554,15 +651,23 @@ func printAffected(w io.Writer, g *Graph, code []queryHit, direct int, all bool)
 // valid in Windows PowerShell 5.1. ok is false when a path isn't shellSafe;
 // the tests are then listed by name, and --json still has the argv.
 func commandLine(c testCmd, all bool) (lines []string, ok bool) {
-	for _, a := range append([]string{c.Dir}, c.Argv[c.runner:]...) {
-		if !shellSafe(a) {
+	per := 1 // arguments per test
+	if c.flag != "" {
+		per = 2
+	}
+	if !shellSafe(c.Dir) {
+		return nil, false
+	}
+	for i, a := range c.Argv[c.runner:] {
+		// c.flag is Sprout's own; everything else came from a path.
+		if !(per == 2 && i%2 == 0 && a == c.flag) && !shellSafe(a) {
 			return nil, false
 		}
 	}
 	runner, files := c.Argv[:c.runner], c.Argv[c.runner:]
-	total := len(files)
+	total := len(files) / per
 	if total > 12 && !all {
-		files = files[:12]
+		files = files[:12*per]
 	}
 	indent := ""
 	if c.Dir != "." {
@@ -570,8 +675,8 @@ func commandLine(c testCmd, all bool) (lines []string, ok bool) {
 		indent = "  "
 	}
 	lines = append(lines, indent+strings.Join(append(append([]string{}, runner...), files...), " "))
-	if len(files) < total {
-		lines = append(lines, fmt.Sprintf("%s(runs %d of %d; --all prints the full command)", indent, len(files), total))
+	if len(files)/per < total {
+		lines = append(lines, fmt.Sprintf("%s(runs %d of %d; --all prints the full command)", indent, len(files)/per, total))
 	}
 	return lines, true
 }
@@ -587,7 +692,7 @@ func printCommand(w io.Writer, lines []string) {
 // narrowed to some of its tests, one for the packages to test whole. It
 // reports whether it wrote any; it doesn't when a path isn't shellSafe.
 func printGoTests(w io.Writer, res impactResult, all bool) bool {
-	lines, ok := commandLine(testCmd{".", append([]string{"go", "test"}, res.GoPackages...), 2}, all)
+	lines, ok := commandLine(testCmd{Dir: ".", Argv: append([]string{"go", "test"}, res.GoPackages...), runner: 2}, all)
 	if !ok || len(res.GoPackages) == 0 {
 		return false
 	}
@@ -601,7 +706,7 @@ func printGoTests(w io.Writer, res impactResult, all bool) bool {
 		}
 	}
 	if len(whole) < len(res.GoPackages) {
-		lines, _ = commandLine(testCmd{".", append([]string{"go", "test"}, whole...), 2}, all)
+		lines, _ = commandLine(testCmd{Dir: ".", Argv: append([]string{"go", "test"}, whole...), runner: 2}, all)
 	}
 	if len(whole) > 0 {
 		printCommand(w, lines)
@@ -633,7 +738,7 @@ func printImpactTests(w io.Writer, res impactResult, all bool) {
 	for _, c := range res.TestCommands {
 		if lines, ok := commandLine(c, all); ok {
 			printCommand(w, lines)
-			for _, f := range c.Argv[c.runner:] {
+			for _, f := range c.tests() {
 				covered[path.Join(c.Dir, f)] = true
 			}
 		}
