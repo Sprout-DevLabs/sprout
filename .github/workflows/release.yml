@@ -50,7 +50,8 @@ jobs:
       actions: read # read the workflow run
       id-token: write # sign the provenance with Sigstore
       contents: write # upload it to the release
-    # Referenced by tag, not SHA: the generator verifies its own tag, and Scorecard allows it.
+    # Referenced by tag, not SHA: the SLSA generator only supports tag refs, since it
+    # verifies its own tag when signing. Scorecard flags this as unpinned.
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
